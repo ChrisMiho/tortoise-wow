@@ -12,13 +12,20 @@ name: tortoise-wow-v2
 # Docker's json-file driver defaults to NO size limit, and these logs are easy to
 # forget because they do not live in logs/ — they are inside the Docker VM, where
 # `du` on the repo will never show them. mangosd writes every SQL statement to
-# stdout, so its container log is the one that runs away. 50 MB x 3 caps each
-# service at 150 MB. Takes effect on `up -d` (container recreate), not `restart`.
+# stdout, so its container log is the one that runs away.
+#
+# 20 MB x 2 caps each service at 40 MB, so all three cost at most 120 MB. That is
+# this half of a ~500 MB total log budget; the other half is the logs the server
+# writes itself into TW_LOGS, capped by scripts/cap-logs.sh. Capping only one of
+# the two leaves the larger problem running — bots.log alone writes 22.6 MB/min
+# with bots active. See docs/DOCKER.md.
+#
+# Takes effect on `up -d` (container recreate), not `restart`.
 x-logging: &default-logging
   driver: json-file
   options:
-    max-size: "50m"
-    max-file: "3"
+    max-size: "20m"
+    max-file: "2"
 
 services:
   db:

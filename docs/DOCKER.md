@@ -112,33 +112,61 @@ Set `TW_IMAGE` back to `tortoise-v2:local` once you have rebuilt a good image.
 
 Two separate things grow, in two separate places, and neither is bounded by default.
 
-**`logs/bots.log`** is the bot AI's per-tick decision trace. It is written at `DETAIL`
-and **ignores `LogFileLevel`**, so nothing in `mangosd.conf` slows it down. Idle it is
-trivial (~14 KB/min); during a battleground it has been measured at **22 MB/min**, and
-it reached **12 GB** once. It is capped by a `logrotate` rule outside this repo:
+The whole budget is **~500 MB**, split across the two. Capping only one leaves the
+larger problem running.
+
+### Half one — the logs the server writes into `TW_LOGS`
+
+`scripts/cap-logs.sh` installs a `logrotate` rule covering **every `*.log`** in that
+directory. Run it once per machine, and again after changing `TW_LOGS`:
+
+```bash
+sudo ./scripts/cap-logs.sh
+./scripts/cap-logs.sh --dry-run     # show what it would write, change nothing
+```
 
 | | |
 |---|---|
-| Config | `/etc/logrotate.turtle-bots.conf` |
-| Schedule | `/etc/cron.d/turtle-bots-logrotate`, every 5 minutes |
-| Budget | 250 MB trigger + worst-case drift + 1 compressed copy ≈ **375 MB** |
+| Config | `/etc/logrotate.turtle.conf` (standalone — *not* in `/etc/logrotate.d/`) |
+| Schedule | `/etc/cron.d/turtle-logrotate`, every 5 minutes |
+| Rule | 50 MB threshold, keep 2, compressed, `copytruncate` |
+| Ceiling | ~163 MB live + 2 compressed ≈ **185 MB** for `bots.log`, ~220 MB for the directory |
 
-The 5-minute cadence is the point, not the size. Size-based rotation only rotates when
-logrotate actually *runs*, and the distro timer fires once a day — at 22 MB/min that is
-~30 GB between checks. The rule uses `copytruncate` because mangosd holds the file open
-`O_APPEND`; renaming it would leave the server writing to an orphaned inode forever.
+`bots.log` is the reason any of this exists: the bot AI's per-tick decision trace,
+written at `DETAIL`, which **ignores `LogFileLevel`** — nothing in `mangosd.conf` slows
+it down. Idle it is trivial (~14 KB/min); during a battleground it is **22.6 MB/min**,
+and it reached **12 GB** once. Measured here: 139 MB compressed to 8.2 MB, a 17:1 ratio,
+because the trace is enormously repetitive.
 
-To turn the trace off entirely instead, set `AiPlayerbot.BotLogFile = ""` in
-`aiplayerbot.conf` and restart. You lose only the per-tick action trace — bot errors
+Three details that are load-bearing, not stylistic:
+
+- **The 5-minute cadence matters more than the threshold.** Size-based rotation only
+  rotates when logrotate *runs*, so the real ceiling is threshold + rate × interval —
+  here 50 MB + ~113 MB. The distro's own timer fires once a day, which at this rate is
+  ~32 GB between checks, so it is useless and this rule brings its own cron.
+- **`copytruncate`, because mangosd holds the file open `O_APPEND`** (`BotLog.cpp:35`).
+  Renaming would leave the server writing to an orphaned inode forever.
+- **No `delaycompress`.** It is copytruncate's usual companion but wrong here — it holds
+  the newest rotation uncompressed for a whole cycle, which for this file means ~163 MB
+  instead of ~10 MB. It protects writers still holding the old inode; copytruncate has
+  already truncated in place, so there is no such writer.
+
+The script also removes `/etc/logrotate.turtle-bots.conf` and its cron entry if present
+— an earlier, narrower rule that covered only `bots.log` at 250 MB. Two uncoordinated
+rotators on one file keep independent `.1`/`.2` sequences and independent status files,
+so the pair has no predictable ceiling at all.
+
+To turn the trace off entirely instead of capping it, set `AiPlayerbot.BotLogFile = ""`
+in `aiplayerbot.conf` and restart. You lose only the per-tick action trace — bot errors
 still reach `errors.log`, and `bg.log`, `bot_events.csv` and `deaths.csv` are untouched.
+See `docs/playerbots/BOTS-LOG-GROWTH-HANDOFF.md` for the full analysis.
 
-**Container logs** are the other half, and they are easy to forget because they are not
-in `logs/` at all — they live inside the Docker VM, so `du` on this repo never shows
-them. `mangosd` writes every SQL statement to stdout. `docker-compose.yml` caps each
-service at 50 MB × 3 files. That takes effect on `docker compose up -d`, not `restart`.
+### Half two — the container logs
 
-Old `logs/server_<date>.log` files are not rotated by anything and simply accumulate —
-delete stale ones by hand.
+Easy to forget, because they are not in `logs/` at all — they live inside the Docker VM,
+so `du` on this repo never shows them. `mangosd` writes every SQL statement to stdout.
+`docker-compose.yml` caps each service at **20 MB × 2 files**, so all three cost at most
+120 MB. That takes effect on `docker compose up -d`, **not** `restart`.
 
 ## Where the source of truth is
 
