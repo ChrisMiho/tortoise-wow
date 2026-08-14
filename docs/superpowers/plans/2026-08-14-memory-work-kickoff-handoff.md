@@ -34,7 +34,7 @@ not re-fix them either.
 
 | Fix | Why it mattered |
 |---|---|
-| `scripts/task3-ramp-step.sh` compose project | It ran `docker compose` from the live stack dir, driving the **retired** `tortoise-wow-v2` project with `tw2-*` containers. Config edits landed correctly and then restarts hit containers that no longer exist — the ramp would have measured a server that never picked up the new bot count. Now every compose call goes through a `compose()` wrapper pinned to this repo via `--project-directory`. |
+| `scripts/bot-ramp.sh` compose project | It ran `docker compose` from the live stack dir, driving the **retired** `tortoise-wow-v2` project with `tw2-*` containers. Config edits landed correctly and then restarts hit containers that no longer exist — the ramp would have measured a server that never picked up the new bot count. Now every compose call goes through a `compose()` wrapper pinned to this repo via `--project-directory`. |
 | `scripts/lib/provenance.sh` × 3 | Full-vs-short SHA and a dirty-count-vs-boolean would have made every verdict read `DRIFT`. The third — hashing the diverged checkout's `Dockerfile` — killed the script under `set -e` before printing anything, and was invisible until the script was actually executed. |
 | `FOREIGN` verdict | Another checkout on this host publishes into the same image namespace. A foreign image passes a liveness smoke test perfectly while containing none of your code. Now rejected rather than reported as `UNKNOWN`. |
 | Image/project/container rename | `tortoise-cm`, project `tortoise-cm`, containers `tcm-*`. The DB volume deliberately keeps `tortoise-wow-v2_dbdata` — it is `external: true` with an explicit `name:`, so it is pinned independently and the rename cannot strand the world. |
@@ -94,9 +94,9 @@ what turns "capability-neutral" from an argument into a measurement.
 mid-login is not a plateau — bot login is staggered.
 
 ```bash
-./scripts/task3-ramp-step.sh 200 apply
-./scripts/task3-ramp-step.sh 200 wait 190
-./scripts/task3-ramp-step.sh 200 gates
+./scripts/bot-ramp.sh 200 apply
+./scripts/bot-ramp.sh 200 wait 190
+./scripts/bot-ramp.sh 200 gates --csv docs/playerbots/ramp-2026-08-14.csv --note "200 plateau"
 ```
 
 Stop gates: **host free ≥ 4 GB** (the tight one now — the VM holds 24 of the
@@ -108,9 +108,14 @@ count.
 impossible at 8 GB; at 23.5 GiB the estimate lands near 15–16 GiB. If the ramp
 gates out earlier, that is a finding — record where and why.
 
-The script still emits human-readable tables rather than CSV. Adding CSV is
-part of 011's own acceptance criteria; do it before the ramp if you want the
-fit to be mechanical rather than hand-transcribed.
+Adding CSV was part of 011's own acceptance criteria, and it landed on
+2026-08-14: `gates --csv FILE [--note TXT]` (shown above) appends one row to
+`FILE` after the human-readable dump, and a standalone `csv FILE [--note TXT]`
+mode does the same without the dump. Both share one writer, so a whole ramp —
+every `apply`/`wait`/`gates` cycle across all five bot counts — accumulates
+into the same file; the header is written only once, when the file is created.
+Use `--csv` on every ramp point so the fit is mechanical rather than
+hand-transcribed.
 
 ### 6. Object census
 

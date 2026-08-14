@@ -41,8 +41,7 @@ We did **not** restore full 1000. Activity-first + **200** online was enough for
 | [../../WINDOWS-SETUP-HANDOFF.md](../../WINDOWS-SETUP-HANDOFF.md) §0 | Live topology + session notes |
 | [../../tests/playerbot-verify.sh](../../tests/playerbot-verify.sh) | Read-only health (alive dials + memory) |
 | [../../scripts/backup-alive-world-pre.sh](../../scripts/backup-alive-world-pre.sh) | Config backup helper |
-| [../../scripts/task3-ramp-step.sh](../../scripts/task3-ramp-step.sh) | One staged Min/Max bump + gates |
-| [../../scripts/wait-rndbots-online.sh](../../scripts/wait-rndbots-online.sh) | Wait for online RNDBOT count |
+| [../../scripts/bot-ramp.sh](../../scripts/bot-ramp.sh) | `apply` one staged Min/Max bump + restart; `gates` dumps free/docker-stats/online count (optionally `--csv FILE [--note TXT]`); `wait [threshold] [timeout_sec]` blocks for online RNDBOT count; `csv FILE [--note TXT]` appends a CSV sample on its own |
 | [../../scripts/verify-ahbot-enabled.sh](../../scripts/verify-ahbot-enabled.sh) | Confirm AhBot conf + activity |
 | [../../scripts/fix-ahbot-password.sh](../../scripts/fix-ahbot-password.sh) | WoW hash = `SHA1(UPPER:UPPER)` |
 

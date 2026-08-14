@@ -46,7 +46,7 @@ Only after Path A (or if memory gates are clearly green with no swap).
 | Then | 400 | Watch host free ≥ 4 GB, WSL available, swap |
 | Stock | 1000 | `cp etc/aiplayerbot.conf.orig1000 etc/aiplayerbot.conf` then **re-apply** ForceActive / teleport / botActiveAlone lines; long login wave |
 
-Keep `DisableActivityPriorities = 0`. Helper: [`../../scripts/task3-ramp-step.sh`](../../scripts/task3-ramp-step.sh).
+Keep `DisableActivityPriorities = 0`. Helper: [`../../scripts/bot-ramp.sh`](../../scripts/bot-ramp.sh).
 
 Full task text: [../superpowers/plans/2026-08-09-alive-world-population.md](../superpowers/plans/2026-08-09-alive-world-population.md) Task 6+.
 

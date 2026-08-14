@@ -58,8 +58,7 @@ layout and carry the specific defects listed below.
 
 | Script | Role here | Known defect to repair |
 |---|---|---|
-| `scripts/task3-ramp-step.sh` | The ramp itself: `apply` sets Min/MaxRandomBots and restarts mangosd, `gates` dumps `free -h` + `docker stats` + online count, `wait` blocks until a threshold. | **Fixed 2026-08-14:** `TW_STACK_ROOT` override, and it no longer drives the retired `tortoise-wow-v2` compose project. **Still to do:** output is human-readable tables, not parseable rows — needs a CSV mode before any curve can be fitted; and the name is a leftover task number. |
-| `scripts/wait-rndbots-online.sh` | Plateau detection — a sample taken mid-login is not a plateau. Handles container status better than `task3`'s `wait`. | Duplicates `task3-ramp-step.sh wait`. Collapse into one implementation. |
+| `scripts/bot-ramp.sh` | The ramp itself: `apply` sets Min/MaxRandomBots and restarts mangosd, `gates` dumps `free -h` + `docker stats` + online count, `wait [threshold] [timeout_sec]` blocks until a threshold (plateau detection — a sample taken mid-login is not a plateau), `csv FILE [--note TXT]` appends a CSV sample and `gates`/`csv` share the same writer. | **Fixed 2026-08-14:** `TW_STACK_ROOT` override, no longer drives the retired `tortoise-wow-v2` compose project, renamed off its previous leftover-task-number name, merged with the sibling script that used to duplicate its `wait` mode (now deleted from `scripts/` — its container-status handling is folded into `wait`), and gained a 12-column CSV mode (`timestamp_utc,image_rev,target_bots,online_bots,mangosd_rss_bytes,mem_source,vm_total_bytes,vm_available_bytes,host_free_bytes,container_restarts,oom_killed,notes`) via `gates --csv FILE [--note TXT]` or standalone `csv FILE [--note TXT]`, header written once per file so a whole ramp accumulates into one CSV. Nothing left to do. |
 | `scripts/lib/botdb.sh` | Read-only queries against `tcm-db`. Env-overridable already. | None known. |
 | `scripts/lib/provenance.sh`, `scripts/verify-running-commit.sh` | Proves the running image was built from the commit under test. **Before/after memory numbers are meaningless without this.** | **Fixed 2026-08-14** — all three, see below. Nothing to repair; use it. |
 | `scripts/ai-dev-profile.sh` | Stops mangosd + realmd, keeps `tcm-db` up. This is how the **bot-free intercept** gets measured, and how RAM is freed for a build. | **Fixed 2026-08-14** by the `tw2-*` → `tcm-*` container rename; it uses plain `docker stop/start`, so nothing else was path-dependent. |
@@ -107,10 +106,13 @@ this repo's; the Docker daemon is not". Verified against real images; the
   isn't a leftover task number. (Its `TW_STACK_ROOT` override and its
   wrong-compose-project bug were **already fixed on 2026-08-14** — it drove the
   retired `tortoise-wow-v2` project, so config edits landed but restarts hit
-  containers that no longer exist.) `docs/alive-world/README.md`'s reference is
+  containers that no longer exist.) **Fixed 2026-08-14:** the rename, the
+  `wait` merge, and the CSV mode itself all landed too — see
+  `scripts/bot-ramp.sh`. `docs/alive-world/README.md`'s reference is
   updated to the new name. That doc's other reference,
-  `tests/playerbot-verify.sh`, is still missing from this repo — either restore
-  it or delete the reference.
+  `tests/playerbot-verify.sh`, was **also fixed 2026-08-14**: restored to this
+  repo and repaired for the current `tcm-*` container names — it was missing
+  entirely before.
 - A **baseline ramp** is captured across at least five bot counts — 50, 200,
   400, 800, 1000 at minimum, continuing upward while stop gates hold — each
   held long enough for RSS to plateau. Stop gates: host free ≥ 4 GB (now the
