@@ -23,7 +23,7 @@ set -uo pipefail
 PLAYER="${1:-Usagi}"
 ROOT="$HOME/tortoise-wow-server-V2"
 LOGS="$ROOT/logs"
-PASS=$(cat "$ROOT/.dbpass")
+PASS=$(tr -d '\r\n' < "$ROOT/.dbpass")
 
 q() { docker exec -e MYSQL_PWD="$PASS" tcm-db mysql -uroot -N -B -e "$1" 2>&1 | grep -v '^mysql:'; }
 hdr() { printf '\n\033[1m=== %s ===\033[0m\n' "$1"; }
