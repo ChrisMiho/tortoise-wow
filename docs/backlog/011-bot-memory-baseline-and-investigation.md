@@ -58,41 +58,57 @@ layout and carry the specific defects listed below.
 
 | Script | Role here | Known defect to repair |
 |---|---|---|
-| `scripts/task3-ramp-step.sh` | The ramp itself: `apply` sets Min/MaxRandomBots and restarts mangosd, `gates` dumps `free -h` + `docker stats` + online count, `wait` blocks until a threshold. | `ROOT=/home/deck/tortoise-wow-server-V2` is hardcoded — make it an env override. Output is human-readable tables, not parseable rows; it needs a CSV mode before any curve can be fitted. The name is a leftover from an old task list and should be renamed. |
+| `scripts/task3-ramp-step.sh` | The ramp itself: `apply` sets Min/MaxRandomBots and restarts mangosd, `gates` dumps `free -h` + `docker stats` + online count, `wait` blocks until a threshold. | **Fixed 2026-08-14:** `TW_STACK_ROOT` override, and it no longer drives the retired `tortoise-wow-v2` compose project. **Still to do:** output is human-readable tables, not parseable rows — needs a CSV mode before any curve can be fitted; and the name is a leftover task number. |
 | `scripts/wait-rndbots-online.sh` | Plateau detection — a sample taken mid-login is not a plateau. Handles container status better than `task3`'s `wait`. | Duplicates `task3-ramp-step.sh wait`. Collapse into one implementation. |
 | `scripts/lib/botdb.sh` | Read-only queries against `tcm-db`. Env-overridable already. | None known. |
-| `scripts/lib/provenance.sh`, `scripts/verify-running-commit.sh` | Proves the running image was built from the commit under test. **Before/after memory numbers are meaningless without this.** | Two mismatches against the current `Dockerfile`/`rebuild.sh` — see below. Both must be fixed before the script is trusted. |
-| `scripts/ai-dev-profile.sh` | Stops mangosd + realmd, keeps `tcm-db` up. This is how the **bot-free intercept** gets measured, and how RAM is freed for a build. | Paths only. |
-| `scripts/backup-alive-world-pre.sh` | Snapshots `aiplayerbot.conf` and friends before the ramp mutates them. | Writes to `/mnt/d/TurtleWow/backups`, which may not exist on this host. |
-| `scripts/check-build-progress.sh` | Progress on a multi-hour unattended build. | Hardcoded to one historical build's log path. |
+| `scripts/lib/provenance.sh`, `scripts/verify-running-commit.sh` | Proves the running image was built from the commit under test. **Before/after memory numbers are meaningless without this.** | **Fixed 2026-08-14** — all three, see below. Nothing to repair; use it. |
+| `scripts/ai-dev-profile.sh` | Stops mangosd + realmd, keeps `tcm-db` up. This is how the **bot-free intercept** gets measured, and how RAM is freed for a build. | **Fixed 2026-08-14** by the `tw2-*` → `tcm-*` container rename; it uses plain `docker stop/start`, so nothing else was path-dependent. |
+| `scripts/backup-alive-world-pre.sh` | Snapshots `aiplayerbot.conf` and friends before the ramp mutates them. | **Fixed 2026-08-14** — the off-host mirror is now optional (`TW_BACKUP_MIRROR`) and its absence no longer aborts the primary backup. |
+| `scripts/check-build-progress.sh` | Progress on a multi-hour unattended build. | **Fixed 2026-08-14** — takes a log path argument / `BUILD_LOG`, else picks the newest `*build*.log`. |
 | `scripts/bot-progression/{snapshot,report,churn-report,describe}.sh` | **The capability-regression instrument** — levels gained per logged-in hour, pool churn ratio, level bands, with pass/fail thresholds. | None known. |
 
-`verify-running-commit.sh` is currently guaranteed to report **DRIFT** against
-any image `scripts/rebuild.sh` produces, for two independent reasons. Both are
-comparison bugs in the recovered script, not problems with the build:
+### What was already repaired on 2026-08-14 — do not redo it
 
-1. `lib/provenance.sh`'s `prov_head_sha()` returns the **full** SHA, while
-   `rebuild.sh` stamps `org.opencontainers.image.revision` from
-   `git rev-parse --short HEAD`. The equality test can never pass.
-2. `prov_is_dirty()` treats the label as the string `"true"`, but `rebuild.sh`
-   stamps `com.turtle.source-dirty` from `git status --porcelain | wc -l` — a
-   count (`0`, `3`, …), never `true`. It also disagrees on definition:
-   `provenance.sh` counts untracked files as dirty, `rebuild.sh` passes
-   `--untracked-files=no`.
+`verify-running-commit.sh` *would* have reported **DRIFT** against every image
+`rebuild.sh` produces. Three defects, all fixed:
 
-The label **keys** themselves are correct — `Dockerfile:81-83` stamps exactly
-the three `provenance.sh` reads — so this is a small repair, not a redesign.
+1. `prov_head_sha()` returned the **full** SHA while `rebuild.sh` stamps
+   `git rev-parse --short HEAD`, so the equality test could never pass. Now
+   `prov_resolve_rev()` resolves the label through git, which normalises any
+   abbreviation.
+2. `prov_is_dirty()` tested the label for the string `"true"`, but
+   `com.turtle.source-dirty` is stamped from `git status --porcelain | wc -l` —
+   a count, never `true`, so the warning never fired on a genuinely dirty build.
+3. `prov_dockerfile_sha()` hashed `$TW_LIVE_ROOT/Dockerfile` — the **diverged**
+   checkout's — and returned a full digest where `rebuild.sh` stamps 12 chars.
+   On a host without that path it killed the script under `set -e` before any
+   verdict printed. This one was invisible to reading and only appeared on
+   execution.
+
+The same change added a **`FOREIGN`** verdict: the revision label is now
+resolved *inside this repo*, so an image built by another checkout sharing the
+`tortoise-*` namespace is rejected rather than passing as `UNKNOWN`. That
+matters here because a foreign image can pass a liveness smoke test perfectly
+while containing none of this tree's code — see `docs/DOCKER.md`, "Names are
+this repo's; the Docker daemon is not". Verified against real images; the
+`MATCH` path against a live container is the one case still untested.
 
 **Acceptance criteria:**
 - A new `docs/playerbots/BOT-MEMORY-INVESTIGATION.md` exists, in the same voice
   and structure as `docs/playerbots/BOT-TRANSPORT-INVESTIGATION.md`.
-- The two `verify-running-commit.sh` defects above are fixed, and the script
-  reports `MATCH` against a freshly built image. Every measurement recorded in
-  the doc names the image revision it was taken against.
-- `scripts/task3-ramp-step.sh` is repaired per the table (env-overridable root,
-  CSV output, sane name) and its `wait` mode is merged with
-  `wait-rndbots-online.sh`. `docs/alive-world/README.md`'s reference to it is
-  updated to the new name if it is renamed. That doc's other reference,
+- `scripts/verify-running-commit.sh` reports `MATCH` against a freshly built
+  image, and every measurement recorded in the doc names the image revision it
+  was taken against. (Its three defects were **already fixed on 2026-08-14** —
+  full-vs-short SHA, dirty-count-vs-boolean, and a Dockerfile path that pointed
+  at the diverged checkout. Do not re-fix them; the remaining work is confirming
+  `MATCH` against a live container, which has never been exercised.)
+- `scripts/task3-ramp-step.sh` gains **CSV output** and its `wait` mode is
+  merged with `wait-rndbots-online.sh`, and it is renamed to something that
+  isn't a leftover task number. (Its `TW_STACK_ROOT` override and its
+  wrong-compose-project bug were **already fixed on 2026-08-14** — it drove the
+  retired `tortoise-wow-v2` project, so config edits landed but restarts hit
+  containers that no longer exist.) `docs/alive-world/README.md`'s reference is
+  updated to the new name. That doc's other reference,
   `tests/playerbot-verify.sh`, is still missing from this repo — either restore
   it or delete the reference.
 - A **baseline ramp** is captured across at least five bot counts — 50, 200,
