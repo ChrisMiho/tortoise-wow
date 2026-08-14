@@ -3,10 +3,19 @@
 #
 # Read-only, runs in seconds. Exit code is the contract:
 #   0  MATCH    the running image was built from HEAD
-#   1  DRIFT    it was built from something else
+#   1  DRIFT    it was built from something else in this repo — OR FOREIGN,
+#               built from a revision that isn't a commit in this repo at
+#               all (a different checkout sharing this image namespace).
+#               Both verdicts exit 1; the exit code alone cannot tell them
+#               apart — read the printed VERDICT line.
 #   2  UNKNOWN  nothing is running, or the image has no provenance labels
 #
-# Run from WSL:  /mnt/d/TurtleWow/scripts/verify-running-commit.sh
+# This in-repo copy is authoritative. A D:\TurtleWow\scripts\ copy of this
+# file predates the FOREIGN verdict and the 2026-08-14 SHA/dirty/Dockerfile
+# repairs (see docs/backlog/011-bot-memory-baseline-and-investigation.md);
+# do not run that one.
+#
+# Run from WSL:  /mnt/c/Coding/tortoise-wow/tortoise-wow/scripts/verify-running-commit.sh
 set -euo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
 # shellcheck source=lib/provenance.sh
