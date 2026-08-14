@@ -8,13 +8,13 @@ Use this when you want snappier loads or a denser world. Do **not** start here f
 2. Confirm Live dials still match STATUS (or re-apply intentionally):
 
 ```bash
-MSYS_NO_PATHCONV=1 wsl -d Ubuntu -u deck -- bash /mnt/d/TurtleWow/tests/playerbot-verify.sh Usagi
+MSYS_NO_PATHCONV=1 wsl -d Ubuntu -u deck -- bash /mnt/c/Coding/tortoise-wow/tortoise-wow/tests/playerbot-verify.sh Usagi
 ```
 
 3. Optional safety backup:
 
 ```bash
-MSYS_NO_PATHCONV=1 wsl -d Ubuntu -u deck -- bash /mnt/d/TurtleWow/scripts/backup-alive-world-pre.sh
+MSYS_NO_PATHCONV=1 wsl -d Ubuntu -u deck -- bash /mnt/c/Coding/tortoise-wow/tortoise-wow/scripts/backup-alive-world-pre.sh
 ```
 
 ## Path A — faster loads (recommended first)
