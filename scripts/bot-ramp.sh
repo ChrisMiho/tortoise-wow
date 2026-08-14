@@ -35,19 +35,30 @@ cd "$ROOT"
 . "$REPO/scripts/lib/provenance.sh"
 
 online_count() {
+  # tr -d '\r': mysql's output through `docker exec` can carry a trailing \r
+  # (wait-rndbots-online.sh already stripped this). Left in, it silently
+  # fails wait mode's ^[0-9]+$ REACHED check and would land in the CSV row
+  # unstripped, where a stray \r mid-record is a row-splitting hazard for
+  # any CSV reader.
   docker exec -e MYSQL_PWD="$PASS" tcm-db mysql -uroot -N -B -e \
-    "SELECT COUNT(*) FROM tw_char.characters c JOIN tw_logon.account a ON a.id=c.account WHERE a.username LIKE 'RNDBOT%' AND c.online=1;"
+    "SELECT COUNT(*) FROM tw_char.characters c JOIN tw_logon.account a ON a.id=c.account WHERE a.username LIKE 'RNDBOT%' AND c.online=1;" \
+    | tr -d '\r'
 }
 
+# Every section below is individually guarded (`|| true`) rather than left to
+# a single failure under `set -e`: `gates --csv` (this task) writes its CSV
+# row only after this function returns, so one hiccup here must not both
+# blank the rest of the human-readable dump AND lose the sample. The operator
+# still wants to see whichever sections did resolve.
 show_gates() {
   echo "=== WSL free ==="
-  free -h
+  free -h || true
   echo "=== docker stats ==="
-  docker stats --no-stream --format 'table {{.Name}}\t{{.CPUPerc}}\t{{.MemUsage}}\t{{.MemPerc}}'
+  docker stats --no-stream --format 'table {{.Name}}\t{{.CPUPerc}}\t{{.MemUsage}}\t{{.MemPerc}}' || true
   echo "=== compose ps ==="
-  compose ps
+  compose ps || true
   echo "=== online RNDBOT ==="
-  online_count
+  online_count || true
   echo "=== dials ==="
   grep -E '^AiPlayerbot\.(Min|Max)RandomBots|^AiPlayerbot\.DisableActivityPriorities|^AiPlayerbot\.botActiveAlone|^AiPlayerbot\.ForceActiveWhenNearPlayer|^AiPlayerbot\.RandomBotTeleportNearPlayer' \
     etc/aiplayerbot.conf || true
@@ -61,7 +72,7 @@ show_gates() {
 # that may have taken 40 minutes to reach. Each function guards its own
 # commands with `|| var=""` / regex validation and always returns 0.
 
-CSV_COLUMNS="timestamp_utc,image_rev,target_bots,online_bots,mangosd_rss_bytes,mem_source,vm_total_bytes,vm_available_bytes,host_free_bytes,container_restarts,notes"
+CSV_COLUMNS="timestamp_utc,image_rev,target_bots,online_bots,mangosd_rss_bytes,mem_source,vm_total_bytes,vm_available_bytes,host_free_bytes,container_restarts,oom_killed,notes"
 
 csv_header() {
   printf '%s\n' "$CSV_COLUMNS"
@@ -80,9 +91,15 @@ csv_quote() {
 # mangosd isn't running or the image predates provenance stamping —
 # prov_image_label() already returns "" rather than failing in that case, so
 # only prov_running_image_id() (a bare `docker inspect`) needs guarding here.
+# Hardcodes tcm-mangosd rather than provenance.sh's $TW_MANGOSD on purpose:
+# every other Docker call in this file (mangosd_pid, mangosd_vmrss_kb,
+# sample_mangosd_rss, container_restarts, oom_killed, wait's status check)
+# hardcodes the literal container name. An overridden $TW_MANGOSD would make
+# this one field silently report a different container's image revision
+# beside the rest of the row's RSS/restart/OOM data for tcm-mangosd.
 csv_image_rev() {
   local image_id
-  image_id=$(prov_running_image_id "$TW_MANGOSD") || image_id=""
+  image_id=$(prov_running_image_id "tcm-mangosd") || image_id=""
   [ -n "$image_id" ] || { echo ""; return 0; }
   prov_image_label "$image_id" "$PROV_LABEL_REV"
 }
@@ -193,16 +210,29 @@ vm_free_bytes() {
 # gate against the VM's 24 GB. Best-effort via PowerShell interop: any failure
 # here (interop disabled, powershell.exe missing, a hiccup) yields an empty
 # field and must never abort the sample.
+#
+# Note on the metric: FreePhysicalMemory is Windows "Free" memory, not
+# "Available" (Free + Standby cache) — it reads several GB below what Task
+# Manager's "Available" column shows for the same instant. That's the
+# conservative direction for a stop gate (it never overstates headroom), so
+# it's left as-is; this is a heads-up for whoever cross-checks a low reading
+# against Task Manager and finds the numbers don't match, not a bug.
 host_free_bytes() {
   local kb
-  kb=$(powershell.exe -NoProfile -Command \
+  # 15s timeout: powershell.exe can't abort the sample on its own, but it CAN
+  # hang it — and WSL<->Windows interop stalling under host memory pressure is
+  # exactly the condition this gate exists to detect, so an unbounded call
+  # here could turn "gate tripped" into "script hung" at the worst moment.
+  # `timeout`'s exit 124 on expiry is already caught by the `|| kb=""` below.
+  kb=$(timeout 15 powershell.exe -NoProfile -Command \
     '(Get-CimInstance Win32_OperatingSystem).FreePhysicalMemory' 2>/dev/null | tr -d '\r') || kb=""
   [[ "$kb" =~ ^[0-9]+$ ]] || { echo ""; return 0; }
   echo $((kb * 1024))
 }
 
-# Stop gate: "no Docker OOM or container restarts" (011). Best-effort: empty
-# field if the container is gone rather than aborting the sample.
+# Stop gate: "no ... container restarts" (011). Best-effort: empty field if
+# the container is gone rather than aborting the sample. Note this alone
+# can't distinguish a routine restart from an OOM kill — see oom_killed().
 container_restarts() {
   local n
   n=$(docker inspect -f '{{.RestartCount}}' tcm-mangosd 2>/dev/null) || { echo ""; return 0; }
@@ -210,22 +240,43 @@ container_restarts() {
   echo "$n"
 }
 
+# Stop gate: "no Docker OOM" (011), split from container_restarts() because
+# they answer different questions. mangosd is `restart: unless-stopped` in
+# docker-compose.yml AND deliberately exits 0 to trigger its own restart
+# (AutoHonorRestart=1 in mangosd.conf, expecting Docker as the supervisor —
+# see docker-compose.yml's mangosd comment), so RestartCount climbing during
+# a healthy ramp is normal and cannot by itself evidence an OOM kill.
+# Best-effort: empty field if the container is gone.
+oom_killed() {
+  local v
+  v=$(docker inspect -f '{{.State.OOMKilled}}' tcm-mangosd 2>/dev/null) || { echo ""; return 0; }
+  case "$v" in
+    true|false) echo "$v" ;;
+    *) echo "" ;;
+  esac
+}
+
 # One CSV row for the current instant. $TARGET and $CSV_NOTE come from the
 # script's own arguments; everything else is sampled fresh.
 csv_row() {
-  local ts img_rev online host_free restarts note
+  local ts img_rev online host_free restarts oom note
   ts=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-  img_rev=$(csv_image_rev)
+  img_rev=$(csv_image_rev) || img_rev=""
   online=$(online_count 2>/dev/null) || online=""
+  # Same regex validation every other field gets, even though online_count()
+  # now strips \r at the source — cheap insurance against anything else
+  # non-numeric (an SQL error slipping onto stdout, say) landing in the row.
+  [[ "$online" =~ ^[0-9]+$ ]] || online=""
   sample_mangosd_rss
   vm_free_bytes
   host_free=$(host_free_bytes)
   restarts=$(container_restarts)
+  oom=$(oom_killed)
   note=$(csv_quote "${CSV_NOTE:-}")
 
-  printf '%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s\n' \
+  printf '%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s\n' \
     "$ts" "$img_rev" "$TARGET" "$online" "$RSS_BYTES" "$RSS_SOURCE" \
-    "$VM_TOTAL_BYTES" "$VM_AVAIL_BYTES" "$host_free" "$restarts" "$note"
+    "$VM_TOTAL_BYTES" "$VM_AVAIL_BYTES" "$host_free" "$restarts" "$oom" "$note"
 }
 
 # Emit the header only the first time a given file is created, then append
@@ -233,7 +284,10 @@ csv_row() {
 # invocations of this script.
 csv_write() {
   local file="$1"
-  if [ ! -f "$file" ]; then
+  # -s, not -f: an existing but EMPTY file (e.g. `touch out.csv` before the
+  # first ramp point) must still get a header, or every row written after it
+  # is headerless forever.
+  if [ ! -s "$file" ]; then
     csv_header > "$file"
   fi
   csv_row >> "$file"
@@ -264,7 +318,14 @@ case "$MODE" in
       i=$((i + 1))
     done
     show_gates
-    [ -n "$CSV_FILE" ] && csv_write "$CSV_FILE"
+    # `if`, not `&&`: with CSV_FILE empty, an AND-list's exit status IS its
+    # left operand's — [ -n "" ] is 1, and that becomes the whole script's
+    # exit status even though everything above succeeded. `gates` with no
+    # --csv must exit 0 on a clean run, not silently read as failure to
+    # anything chaining ramp steps with && or running under set -e.
+    if [ -n "$CSV_FILE" ]; then
+      csv_write "$CSV_FILE"
+    fi
     ;;
   csv)
     CSV_FILE="${3:?usage: bot-ramp.sh <min/max> csv <file> [--note TXT]}"
