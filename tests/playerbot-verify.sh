@@ -54,11 +54,19 @@ else
 fi
 
 hdr "4. bots.log growth (retry-loop cost)"
-S1=$(stat -c %s "$LOGS/bots.log"); sleep 5; S2=$(stat -c %s "$LOGS/bots.log")
-awk -v a="$S1" -v b="$S2" 'BEGIN{
-  r=(b-a)/5;
-  printf "size: %.1f MB   rate: %.0f KB/s (~%.0f MB/hour)\n", b/1048576, r/1024, r*3600/1048576;
-}'
+# Guarded like section 3, which reads the same file. Unguarded, a missing
+# bots.log gives two `stat: cannot statx` splats and then a confident
+# "size: 0.0 MB   rate: 0 KB/s" — which reads as "the retry loop is quiet"
+# when it actually means "there is no log to measure".
+if [ -f "$LOGS/bots.log" ]; then
+  S1=$(stat -c %s "$LOGS/bots.log"); sleep 5; S2=$(stat -c %s "$LOGS/bots.log")
+  awk -v a="$S1" -v b="$S2" 'BEGIN{
+    r=(b-a)/5;
+    printf "size: %.1f MB   rate: %.0f KB/s (~%.0f MB/hour)\n", b/1048576, r/1024, r*3600/1048576;
+  }'
+else
+  echo "no bots.log at $LOGS/bots.log — nothing to measure (0.0 MB would be a lie)"
+fi
 df -h "$HOME" | tail -1
 
 hdr "5. invitable bots near $PLAYER"
