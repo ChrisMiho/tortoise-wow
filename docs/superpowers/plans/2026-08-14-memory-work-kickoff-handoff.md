@@ -96,8 +96,50 @@ mid-login is not a plateau — bot login is staggered.
 ```bash
 ./scripts/bot-ramp.sh 200 apply
 ./scripts/bot-ramp.sh 200 wait 190
+# ...then poll to a plateau (see below) before recording the ramp point:
 ./scripts/bot-ramp.sh 200 gates --csv docs/playerbots/ramp-2026-08-14.csv --note "200 plateau"
 ```
+
+#### `REACHED` is not a plateau — this is the step that is easy to skip
+
+`wait` is an **online-bot-count threshold**, nothing more. It prints `REACHED`
+the instant the count crosses, and nothing in it samples RSS. Bot inventory and
+talent construction keep running well past login, so mangosd's RSS is still
+climbing at `REACHED`. Take the ramp row there and the number is low; do it at
+every count and the fit comes out with a shallow slope and an inflated
+intercept — and the rows look perfectly well-formed, so no later reader can
+tell it happened.
+
+So after `REACHED`, poll before you record:
+
+```bash
+# every ~2 minutes, until mangosd_rss_bytes stops rising
+./scripts/bot-ramp.sh 200 csv docs/playerbots/ramp-2026-08-14.csv --note "200 settling"
+```
+
+`csv` is the same writer without the dump, so these settling samples land in
+the same file and are labelled by their `--note`. When two or three consecutive
+`mangosd_rss_bytes` values agree to within a percent or so, *that* is the
+plateau — take the `gates --csv ... --note "200 plateau"` row and move on. Keep
+the settling rows; they are the evidence the plateau was real.
+
+#### `wait`'s timeout is the fourth positional, and 900s will not survive 800+
+
+`wait [threshold] [timeout_sec]` defaults to a **900-second** timeout. That is
+fine at 50 and 200 and far too short at 800 and 1000, where staggered login
+takes much longer than fifteen minutes — you would get `TIMEOUT` well before
+the threshold. Pass it explicitly at the upper counts:
+
+```bash
+./scripts/bot-ramp.sh 800 apply
+./scripts/bot-ramp.sh 800 wait 760 5400      # threshold 760 bots, 90-minute ceiling
+```
+
+A `TIMEOUT` is not a corruption: it exits 1 but still prints the full gates
+dump, so you can read the online count and decide whether to keep waiting.
+`BLOCKED` (exit 2) is the one to take seriously — it now needs three
+consecutive non-running polls, so it no longer fires on mangosd's routine
+Docker-supervised restart.
 
 Stop gates: **host free ≥ 4 GB** (the tight one now — the VM holds 24 of the
 host's 32 GB), VM available ≥ 2 GB, no Docker OOM or container restarts, client
@@ -108,6 +150,8 @@ count.
 impossible at 8 GB; at 23.5 GiB the estimate lands near 15–16 GiB. If the ramp
 gates out earlier, that is a finding — record where and why.
 
+#### The CSV
+
 Adding CSV was part of 011's own acceptance criteria, and it landed on
 2026-08-14: `gates --csv FILE [--note TXT]` (shown above) appends one row to
 `FILE` after the human-readable dump, and a standalone `csv FILE [--note TXT]`
@@ -116,6 +160,29 @@ every `apply`/`wait`/`gates` cycle across all five bot counts — accumulates
 into the same file; the header is written only once, when the file is created.
 Use `--csv` on every ramp point so the fit is mechanical rather than
 hand-transcribed.
+
+The schema is **14 columns**, fixed now so today's rows stay comparable against
+the 2000/3000-bot run 011 scopes for later:
+
+```
+schema_version,timestamp_utc,image_rev,target_bots,configured_bots,online_bots,
+mangosd_rss_bytes,mem_source,vm_total_bytes,vm_available_bytes,host_free_bytes,
+container_restarts,oom_killed,notes
+```
+
+Two of those exist purely to protect the later comparison. `schema_version`
+(currently `1`) is first so a reader can branch on it before trusting anything
+else, and the writer **refuses to append** to a file whose header does not
+match the current column set — if you see that error, write the run to a new
+file rather than editing the header. `configured_bots` is read out of
+`aiplayerbot.conf`, whereas `target_bots` is only what you typed on the command
+line; when they disagree, an `apply` did not take and the row is telling you so.
+
+A relative `--csv` path resolves against the directory you ran the script from,
+so the paths shown here work from the repo root. The parent directory is
+created if it does not exist, and if the write fails anyway the row is printed
+to stderr — a plateau that cost 40 minutes is recoverable from scrollback
+rather than lost.
 
 ### 6. Object census
 
