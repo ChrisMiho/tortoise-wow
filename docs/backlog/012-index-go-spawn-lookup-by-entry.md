@@ -1,10 +1,28 @@
 ---
-status: pending
+status: blocked
 risk: medium
 area: playerbots/transport
 ---
 
 # getGameObjectsNear walks every GO spawn in the world on every call
+
+**Hold — not a failed attempt.** Set to `blocked` on 2026-08-15 as a deliberate
+scheduling hold, so `backlog-drain` does not pick it up while the drain is
+focused solely on the bot-memory effort (artifact 011 and the optimization
+artifacts its plan produces). This artifact is in `playerbots/transport`, not
+`playerbots/memory`.
+
+Nothing is wrong with it: it has never been attempted, has no `depends-on`, and
+is a conventional code change that was ready to drain. `blocked` is used here
+only because the artifact format has no "not yet, by choice" status —
+`out-of-scope` would wrongly tell a future reader to scope a replacement
+artifact instead of reopening this one, and `blocked` correctly stays out of
+drain's two-consecutive-failure circuit breaker. **To resume: set
+`status: pending` and delete this block.** Nothing else needs undoing.
+
+Note also that `docs/backlog/README.md`'s required pilot run has still never
+happened, and the `backlog-batch` `--env-file` fix is still untested — both are
+prerequisites for any unattended drain, independent of this hold.
 
 **Problem:** `WorldPosition::getGameObjectsNear` (and its creature twin) runs
 `sObjectMgr.DoGOData(worker)`, which iterates the entire `m_GameObjectDataMap`

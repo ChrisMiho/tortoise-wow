@@ -1,9 +1,23 @@
 ---
-status: pending
+status: in-progress
 risk: medium
 area: playerbots/memory
 depends-on:
 ---
+
+**Claimed 2026-08-15 — worked by hand, not by a drain.** Set to `in-progress`
+per the handoff's step 1 (`docs/superpowers/plans/2026-08-14-memory-work-kickoff-handoff.md`),
+so a drain reports it but never picks it up underneath the work. **This is not a
+crashed tick** — the usual reason for a stuck `in-progress` — so do not reset it
+to `pending` on that assumption.
+
+Progress: the tooling half is **done and merged-pending-review** (PR #20 —
+`scripts/bot-ramp.sh` with CSV output, the `wait` merge, the rename, the doc
+repointing, and `tests/playerbot-verify.sh` restored). The static-analysis half
+(code analysis, object sizes, and the prioritized optimization plan) is
+**in progress**. The measurement half — bot-free intercept, the 50→1000 ramp,
+the instrumented object census, and the capability baseline — is **not started**
+and needs the live stack with a human present.
 
 # No attribution for bot memory — mangosd burns ~4.67 GiB at 200 bots with no idea where it goes
 
