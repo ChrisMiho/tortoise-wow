@@ -2,7 +2,11 @@
 # Shared provenance helpers — what commit a tree is at, what commit an image was
 # built from, and whether those two agree.
 #
-# Sourced by ship-cpp-fix.sh and verify-running-commit.sh; not executable alone.
+# Sourced by verify-running-commit.sh and scripts/bot-ramp.sh (for the CSV
+# `image_rev` column); not executable alone. It is NOT sourced by
+# `D:\TurtleWow\scripts\ship-cpp-fix.sh`, which this comment used to name —
+# that script does not ship in this repo and pulls in its own stale copy of
+# this file, one that predates the 2026-08-14 repairs below. See docs/DOCKER.md.
 # Every path is an env-var override with a live default, so the tests can point
 # these at stubs without touching the real server.
 

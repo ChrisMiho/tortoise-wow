@@ -73,6 +73,18 @@ For the fuller stop → build → up → verify → push cycle, including a worl
 fingerprint taken before the restart and compared after, see
 `D:\TurtleWow\scripts\ship-cpp-fix.sh`.
 
+> **Do not run that script — read it for reference only.** It does not ship in
+> this repo, and it sources the `D:\TurtleWow\scripts\lib\provenance.sh` copy,
+> which predates the `FOREIGN` verdict and the three 2026-08-14 provenance
+> repairs (full-vs-short SHA, dirty-count-vs-boolean, and a `Dockerfile` path
+> pointing at the diverged checkout — see
+> `docs/backlog/011-bot-memory-baseline-and-investigation.md`). It would
+> therefore report `DRIFT` against every image `rebuild.sh` produces, or die
+> under `set -e` before printing a verdict. This is the same hazard
+> `scripts/verify-running-commit.sh` warns about in its own header. Use
+> `./scripts/rebuild.sh` plus `./scripts/verify-running-commit.sh` from this
+> repo instead.
+
 ## Verify it actually works
 
 A bound port only proves `docker-proxy` answered. Check the population:
