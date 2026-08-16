@@ -89,6 +89,32 @@ docker exec -i -e MYSQL_PWD="$P" tcm-db mysql -uroot -N -e \
 `realmflags=2` means offline; `port` disagreeing with `WorldServerPort` in
 `mangosd.conf` makes the client hang after login, before character select.
 
+## Prove the running server is this repo's code
+
+`scripts/verify-running-commit.sh` answers "is what's running built from HEAD?"
+against whatever is already up. `scripts/validate-stack.sh` is the stronger,
+scriptable form: give it an image tag and it brings that image up and refuses to
+report success unless three gates pass.
+
+```bash
+./scripts/validate-stack.sh --image tortoise-cm:local
+./scripts/validate-stack.sh --image tortoise-cm:local --keep-up   # leave it running
+```
+
+| Gate | What it proves |
+|---|---|
+| provenance | the image's stamped revision resolves in this repo **and** equals HEAD — catches both DRIFT and FOREIGN |
+| identity | `tcm-mangosd` is running the image ID that tag resolves to. Tags are mutable; `:local` lies the moment anything is rebuilt |
+| liveness | world port open, `realmlist` reads `port=8095 realmflags=0`, and at least one character is online |
+
+The last stdout line is always `VALIDATE-STACK: PASS` or
+`VALIDATE-STACK: FAIL <reason>`. Exit codes: `0` pass, `1` a gate failed, `2` the
+checks could not run (docker down, missing `.env`, unlabelled image).
+
+An image built without `--build-arg GIT_SHA` carries no provenance labels and can
+only ever return `UNKNOWN`. Both `scripts/rebuild.sh` and the `backlog-batch`
+workflow pass them; anything else you build by hand must too.
+
 ## Rollback
 
 Every build is tagged with its commit, so the previous server is still on disk:
