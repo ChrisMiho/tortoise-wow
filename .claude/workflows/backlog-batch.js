@@ -222,34 +222,23 @@ const validated = await agent(
    dockerReady: false and liveness: a one-sentence explanation, and do NOT
    attempt docker compose at all -- skip straight to reporting that back.
 
-   If Docker is ready: bring the stack up with the ${imageTag} image.
+   If Docker is ready: do NOT hand-roll the compose invocation. Run the repo's
+   gate script, which brings the stack up and refuses to report success unless
+   provenance, image identity, and real liveness all pass:
 
-   CRITICAL -- you are in a git worktree, and .env IS NOT THERE. It is
-   gitignored, so it exists only in the main checkout and no worktree ever
-   receives a copy. docker-compose.yml opens with
-   "\${DB_PASS:?set DB_PASS in .env}" and resolves TW_ETC / TW_DATA / TW_LOGS
-   the same way, so a bare "docker compose up -d" from this worktree dies
-   immediately on the missing variable and never starts anything. Point it at
-   the main checkout's .env explicitly:
-
-     TW_IMAGE=${imageTag} docker compose --env-file <main-checkout>/.env up -d
+     <main-checkout>/scripts/validate-stack.sh --image ${imageTag} \\
+       --env-file <main-checkout>/.env --keep-up
 
    where <main-checkout> is the repository root of the ORIGINAL session
-   directory, not this worktree. Resolve it with
-   "git -C <worktree> worktree list" -- the FIRST entry is the main checkout.
-   Verify the file exists before running compose; if it does not, return
-   dockerReady: false with that as the reason rather than guessing at values.
+   directory, not this worktree -- .env is gitignored and exists only there.
+   Resolve it with "git -C <worktree> worktree list": the FIRST entry is the
+   main checkout. The script must be run from WSL, not Git Bash.
 
-   TW_IMAGE must be set explicitly: docker-compose.yml defaults it to
-   tortoise-cm:local, so omitting it silently reuses whatever was built
-   previously instead of this batch's image. (Compose project name is pinned
-   to tortoise-cm; tortoise-wow-v2_dbdata is an external volume -- never use
-   "docker compose down -v", that volume is the entire world.) This is a
-   single-developer, no-live-players development server -- you are not
-   simulating a player, just confirming the server comes up correctly.
-
-   Confirm the baseline liveness smoke test: the server starts, aiplayerbot.conf
-   loads, bots spawn. Report that in liveness.
+   Its last stdout line is "VALIDATE-STACK: PASS" or
+   "VALIDATE-STACK: FAIL <reason>". Report that line verbatim in liveness.
+   If it is FAIL, set dockerReady false and do not attempt any per-artifact
+   check -- an unverified server cannot confirm anything, and a check that
+   "passed" against a foreign or drifted image is worse than no check at all.
 
    Then, for each artifact below, attempt only what its inGameCheck says is
    confirmable from logs or console output (not everything is -- most checks
@@ -262,11 +251,13 @@ const validated = await agent(
    attempted, and what you observed or why it wasn't scriptable. Do not claim
    you confirmed something you only assumed.
 
-   Whether or not the build/validation was clean, finish by bringing the
-   stack back down (plain "docker compose down" with the SAME --env-file, never
-   with -v) before you
-   return -- this must happen even if something above failed or looked
-   wrong, so the stack is never left running unattended.`,
+   Whether or not the build/validation was clean, finish by bringing the stack
+   back down before you return, so it is never left running unattended:
+
+     docker compose --env-file <main-checkout>/.env down
+
+   Plain "down". NEVER "down -v" -- tortoise-wow-v2_dbdata is the entire world.
+   This must happen even if something above failed or looked wrong.`,
   { phase: 'Validate', label: 'validate', schema: VALIDATE_SCHEMA }
 )
 
