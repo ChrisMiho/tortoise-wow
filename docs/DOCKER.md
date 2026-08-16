@@ -61,9 +61,15 @@ or detach it — see "Things that will cost you an afternoon" below. A backgroun
 build is cancelled partway through and leaves nothing behind.
 
 Every build recompiles the entire tree — **1169 translation units, every time,
-regardless of what changed**. `COPY . /src` never cache-hits on this host, so
-there is no incremental build to fall back on. That is why the time is ~9.5
-minutes whether you changed one file or a hundred.
+regardless of what changed**. That is why the time is ~9.5 minutes whether you
+changed one file or a hundred.
+
+The cause is **not** that layer caching is broken: a small `COPY . /ctx` probe
+against this same context cached cleanly on a second identical build. What is
+not established is why the real compile layer never survives. The leading
+suspect is BuildKit evicting it under space pressure — this host carries ~58 GB
+of images and ~34 GB of build cache — but that has not been proven, so treat it
+as the next thing to test rather than a known fact.
 
 **ccache does not fix this — it was measured and rejected on 2026-08-16.** Adding
 `ccache` on a BuildKit cache mount (`CMAKE_CXX_COMPILER_LAUNCHER=ccache`) produced:
@@ -76,9 +82,16 @@ minutes whether you changed one file or a hundred.
 
 Zero hits in every case, including a build with no source change whatsoever, and
 **85% of compiler invocations reported as uncacheable** (1016 / 1193). The change
-was reverted. Do not re-attempt it without first fixing the underlying cause —
-the `COPY . /src` layer never cache-hitting — because until that is fixed no
-compiler-level cache can help.
+was reverted. Do not re-attempt it before working out why the compile layer never
+survives between builds — until that is fixed, no compiler-level cache can help.
+
+A more promising route is keeping the **build stage itself** warm rather than
+caching individual compiler calls. The other project on this host does exactly
+that: `tortoise-v2:builder` is a saved builder-stage image carrying 1,188 `.o`
+files and 14 GB of objects under `/build`, so its compiled output survives
+between builds instead of being rebuilt from nothing. Untested here, but it
+attacks the actual problem — no reuse of compiled objects — instead of layering
+a second cache on top of it.
 
 If the VM's own resource ceiling ever needs raising again — this is what
 actually controls build parallelism, not any per-container Docker setting —
