@@ -33,9 +33,30 @@ entire night's matches instead of one match.
   - `TOURNAMENT-RUN bracket=<id> status=blocked reason=exceeded_expected_rounds`;
   - `TOURNAMENT-RUN bracket=<id> status=failed reason=no_result(<a> vs <h>)` when
     `match-run.sh` returns no `winner=`.
-- **A draw blocks the bracket, by design.** It eliminates nobody, the ladders go
-  uneven, and the run stops — advancing a side the server did not declare would
-  fabricate a result. The driver logs a warning naming the drawn pairing.
+- **A draw is broken by tiebreak, not by blocking**, so a 0-0 match cannot end an
+  unattended run. On `winner=NONE` the driver walks this ladder in order and
+  stops at the first rung that separates the teams:
+  1. **Higher score** — `allianceScore` / `hordeScore` from the `MATCH` line. In
+     WSG the score *is* flag captures, so this rung is "who capped more". Skip it
+     when either reads `-1` (no score could be read) or the two are equal.
+  2. **Fewer deaths** — counted from `<match run-dir>/telemetry.csv` as `alive`
+     transitions from `1` to `0`, summed per team. Skip this rung entirely when
+     the CSV is absent or empty, which is the normal state with
+     `Tournament.TelemetryIntervalMs = 0`.
+  3. **Higher seed** — the earlier team in its ladder, from
+     `bracket_ladder`. This rung always separates, so the ladder always
+     terminates.
+- Each tiebreak is recorded with the rung that decided it —
+  `state_record_result ... <winner> tiebreak_score|tiebreak_deaths|tiebreak_seed`
+  — and logged at the time, naming the pairing, the rung, and the numbers that
+  decided it. **A decided match must never be recorded as if the server declared
+  it.**
+- The run's final report states how many matches were decided by tiebreak rather
+  than won outright; a champion crowned entirely on tiebreaks is a legitimate
+  outcome but not the same as one that won its matches, and the output says
+  which.
+- `status=blocked reason=uneven_survivors` remains reachable — a match that
+  produced no `MATCH` line at all still fails rather than being tiebroken.
 - `bash -n scripts/tournament/tournament-run.sh` exits 0.
 - With a fabricated run directory — `state_init` for `wsg-open` with the four
   team ids as seeds, then `state_record_result <dir> 1 stormwind-sentinels
@@ -45,10 +66,11 @@ entire night's matches instead of one match.
   `skipping stormwind-sentinels vs orgrimmar-warsong — already recorded` line
   before it attempts anything else.
 - `docs/playerbots/TOURNAMENT-RUNNING.md` exists and covers: how to start and
-  resume a run; why the structure is two mirrored ladders (`Unit.cpp:5189`); that
-  draws block the bracket and how to replay or decide one by hand; that only the
-  two playing teams are ever logged in, so concurrent population stays at 20
-  regardless of bracket size; and the run-directory artifact layout.
+  resume a run; why the structure is two mirrored ladders (`Unit.cpp:5189`); the
+  tiebreak ladder and, plainly, that a tiebroken match is a decision rather than
+  a result and where to read `decidedBy` to tell them apart; that **only the 20
+  bots playing the current match are online — every other team is logged out and
+  the alive-world random pool is off**; and the run-directory artifact layout.
 
 **Notes:**
 
@@ -68,9 +90,9 @@ entire night's matches instead of one match.
 - **Verification needing a live stack (not part of these criteria):** a full
   `wsg-open` run — two round-1 matches then a final — ending in
   `TOURNAMENT-RUN bracket=wsg-open champion=<team-id> rounds=<n>`. Budget ~25
-  minutes per match, so up to ~75 minutes. A `status=blocked
-  reason=uneven_survivors` exit is the designed behaviour for a draw, and the fix
-  is a human decision (replay or seed advance), not a code change — record which
-  happened.
+  minutes per match, so up to ~75 minutes. Record how many matches were decided
+  by tiebreak and at which rung — if most of the bracket is settled on
+  `tiebreak_seed`, the bots are not scoring at all and that is a finding for
+  `docs/playerbots/BG-AI-ANALYSIS.md`, not a tournament that worked.
 - `tournament-run.sh` does **not** manage the alive-world bot pool. That
   interaction is artifact 043.

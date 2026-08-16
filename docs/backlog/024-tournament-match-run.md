@@ -34,6 +34,14 @@ logged out before the next is logged in.
 - **Gear gate:** if `gear-audit.sh` fails for either team it runs
   `gear-apply.sh team <t>` and re-audits; still incomplete is a fatal exit. A
   half-dressed team is a rigged match.
+- **Population gate: only the 20 bots playing this match may be online.** After
+  logging both teams in, the script reads every online character from
+  `tw_char.characters`, records the full list into `<run-dir>/match.log`, and
+  aborts if any character outside the two rosters is online — with an allowance,
+  default 1 and overridable, for a GM spectator. The alive-world random pool
+  being off is a **precondition**, not something this script changes: it does not
+  edit `aiplayerbot.conf` or restart mangosd mid-run. Failing here is correct —
+  a populated world changes the match, and bot AI is single-core.
 - Two assembly modes exist behind one switch, `ASSEMBLE_MODE`, defaulting to
   `direct` and overridable from the environment:
   - `direct` — `ctl_create`, then `tournament add <inst> <name>` per bot, then a
@@ -50,8 +58,15 @@ logged out before the next is logged in.
   cleanup) stops the instance and records `NONE`.
 - The final line is always
   `MATCH alliance=<t> horde=<t> winner=<ALLIANCE|HORDE|NONE> instance=<id>
-  duration=<s>`, teed into `<run-dir>/match.log`. Exit 0 on a completed match
-  **including a draw**; exit 1 only if the match could not be run at all.
+  duration=<s> allianceScore=<n> hordeScore=<n>`, teed into
+  `<run-dir>/match.log`. Exit 0 on a completed match **including a draw**; exit 1
+  only if the match could not be run at all.
+- **The two score fields are load-bearing, not decoration.** The bracket driver
+  tiebreaks a `winner=NONE` on them, so they must carry the last score actually
+  read from `tournament result` before the instance disappeared — not zeros
+  written because the final read failed. When no score could be read at all, emit
+  `-1` for both, which `tournament result` already uses to mean "not exposed" and
+  which the driver can tell apart from a real 0-0.
 - `bash -n scripts/tournament/match-run.sh` exits 0.
 
 **Notes:**

@@ -26,6 +26,16 @@ Implements `docs/superpowers/plans/2026-08-16-03-gear-loadouts.md` Task 3 Step 3
   `mage-dps`, `warlock-dps`, `druid-tank`, `druid-healer` — 12 files.
 - Every file is valid JSON, carries `"provisional": true`, and contains all 13
   required slots in both the `base` and `upgrade` tiers with no `0` values.
+- **`base` is white (`quality = 1`) in every slot and `upgrade` is green
+  (`quality = 2`).** Uniform basic white for the first tournament: complete and
+  fair by construction, refined later once matches are running.
+- **Every generated item is one the class can actually wear.** Spot-check at
+  least one cloth class (mage/priest/warlock), one leather (rogue/druid), one
+  mail (hunter/shaman) and one plate (warrior/paladin) and confirm the chosen
+  chest, legs and hands are of that armor `subclass` — not merely
+  `allowable_class = -1`. 1,818 of the 1,940 white items are unrestricted by
+  class, so the bitmask alone permits a plate chest on a mage and the error only
+  surfaces later as `cannot_equip` at apply time.
 - `gear_validate <class> <role>` exits 0 for all 12.
 - Every distinct item id referenced across all 12 files (including
   `.consumables[].itemId`) resolves in `tw_world.item_template`: the returned row
@@ -36,19 +46,34 @@ Implements `docs/superpowers/plans/2026-08-16-03-gear-loadouts.md` Task 3 Step 3
 
 **Notes:**
 
-- **This artifact requires a running `tcm-db` container.** `gear-generate.sh`
-  reads `tw_world.item_template` through
-  `wsg_mysql` → `docker exec ... tcm-db mysql ...`. There is no offline substitute:
-  the whole point is to select real item ids from this server's world data, and
-  fabricating ids would produce files that validate and then fail to equip.
-  **If `tcm-db` is not reachable, report this artifact blocked rather than
-  inventing item ids or committing an empty/partial set.** That is the correct
-  outcome, not a failure — a human can bring the stack up and re-run.
-- The Docker state on this host is at a deliberate fresh slate (2026-08-16): only
-  the rollback anchor image survives and `.env` points `TW_IMAGE` at it. The
-  database **volume** (`tortoise-wow-v2_dbdata`) is untouched, so the world data
-  is intact — but the stack still has to be brought up for this to work, and
-  **never with `docker compose down -v`**; plain `down` only.
+- **This artifact requires a running `tcm-db` container, and you are authorised
+  to start one.** `gear-generate.sh` reads `tw_world.item_template` through
+  `wsg_mysql` → `docker exec ... tcm-db mysql ...`. There is no offline
+  substitute: fabricating ids produces files that validate and then fail to
+  equip. Bring up **only the database** — it needs no server image and no build:
+
+  ```
+  docker compose --env-file <main-checkout>/.env up -d db
+  ```
+
+  Run it from **WSL**, not Git Bash: `.env` holds POSIX bind-mount paths
+  (`/home/deck/...`) that Git Bash rewrites into `C:\` paths. Wait for
+  `docker inspect --format '{{.State.Health.Status}}' tcm-db` to read `healthy`
+  (about 20 s). The world data survived the image fresh-slate — the
+  `tortoise-wow-v2_dbdata` volume is intact and holds `tw_world`, `tw_char`,
+  `tw_logon`, `tw_logs`.
+- **Never `docker compose down -v`.** That volume is the entire world. Plain
+  `down`, or leave the db running.
+- **`wsg_mysql` sends stderr to `/dev/null`, so a failing query returns silence,
+  not an error.** A survey run on 2026-08-16 produced empty output for six
+  consecutive queries and looked like "no matching items" when in fact every one
+  had failed on an unknown column. When a query returns nothing unexpectedly,
+  re-run it through a bare `docker exec ... mysql` with stderr visible before
+  concluding anything about the data.
+- **Do not put a variable inside a wrapped `wsl -d Ubuntu -- bash -lc '...'`
+  one-liner.** It returns plausible-but-wrong output silently — on this host it
+  reported an empty log directory and a wrong `du` total in the same command.
+  Write a script file and invoke that instead.
 - **Run from WSL, not Git Bash** (`jq` and MSYS path rewriting both bite here).
 - These ids are mechanically chosen — highest ItemLevel per slot at the tier's
   quality — and are *meant* to stay `"provisional": true` at the end of this work.

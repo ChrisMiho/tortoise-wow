@@ -48,10 +48,14 @@ Step 1, plus the release-record skeleton from Tasks 5-7.
      playability check (character-select and enter-world times, frame rate in a
      capital city and in an empty zone, movement responsiveness, `.gm on` +
      `.appear <bot>`, chat and spell latency) and a plain verdict.
-  2. **A tournament match against a full world** — the pool-40 baseline against
-     the pool-1000 run, compared on `entered=`, `stuck=`, per-bot `distance=`,
-     mangosd CPU from `docker stats`, and whether the match still reached a
-     result, ending in a stated recommendation.
+  2. **Bot population during a tournament** — not a measurement but a recorded
+     decision: tournaments run with the random pool at **zero**, so the only
+     characters online are the 20 playing plus a GM spectator. State the reason
+     (bot AI is single-core; memory at 1000 bots is comfortable at 4.27 GiB, so
+     contention is the concern, not RSS) and note that the "match against a
+     populated world" comparison is deliberately **not** run, because the
+     operating configuration does not call for one. If a populated backdrop is
+     ever wanted for the stream, that comparison is the thing to run first.
   3. **Tag-time verification** — filled in when the tag is actually cut.
 
 **Notes:**
@@ -62,14 +66,19 @@ Step 1, plus the release-record skeleton from Tasks 5-7.
   not push anything, and do not fill in the three sections with estimates — an
   unfilled section marked as such is honest; a plausible-looking filled one is a
   fabricated release record.
-- **Plan 09 Task 5 (client playability at 1000 bots) and Task 6 (a match against a
-  full world) are deliberately not separate backlog artifacts.**
-  `docs/playerbots/BOT-MEMORY-INVESTIGATION.md` states in bold that "client still
-  playable" is UNVERIFIED at every bot count *because the check cannot be
-  automated*, and nothing has ever measured 1000 alive-world bots alongside a live
-  match — a CPU question on a single-core AI loop. Their entire output is a
-  filled-in section of this document, so they live here as a checklist rather than
-  as artifacts an unattended agent would either block on or fabricate.
+- **Plan 09 Task 5 (client playability at 1000 bots) is deliberately not a
+  separate backlog artifact.** `docs/playerbots/BOT-MEMORY-INVESTIGATION.md`
+  states in bold that "client still playable" is UNVERIFIED at every bot count
+  *because the check cannot be automated*. Its entire output is a filled-in
+  section of this document, so it lives here as a checklist rather than as an
+  artifact an unattended agent would either block on or fabricate. The 1000-bot
+  claim is about the **alive world**, which is a separate configuration from a
+  tournament — it still needs verifying, it is just not a tournament property.
+- **Plan 09 Task 6 (a match against a full world) is not scoped at all.** It
+  exists to answer whether a tournament is watchable with 1000 bots also
+  thinking; that question was closed by decision rather than measurement —
+  tournaments run with the random pool at zero. Recording that, and what would
+  have to be measured if the decision were ever reversed, replaces it.
 - **If the client is not playable at 1000, do not tag a release whose headline
   claim is a population nobody can join.** The correct response is to bisect with
   `standup-1000.sh --target N` for the highest playable count and record *that* as

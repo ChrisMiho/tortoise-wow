@@ -7,13 +7,19 @@ depends-on: 025-tournament-run-driver.md
 
 # Raising the bot-pool default changes what the match profile restores
 
-**Problem:** `docs/playerbots/wsg/wsg-mode.sh on` deliberately shrinks the bot
-pool to `MinRandomBots = MaxRandomBots = 40` **because bot AI is single-core**,
-and `off` restores it. Raising the compiled default to 1000 changes what gets
-snapshotted and restored — and a restore that silently reinstates 1000 bots
-mid-tournament would be a surprise nobody asked for. `WSG-BOT-MATCH.md` §9
-documents a `--profile alive-world` fallback for when no snapshot exists, which
-implies there is a hardcoded value somewhere that is now wrong.
+**Problem:** `docs/playerbots/wsg/wsg-mode.sh on` shrinks the bot pool to
+`MinRandomBots = MaxRandomBots = 40` **because bot AI is single-core**, and `off`
+restores it. Two things are now wrong with that. Raising the compiled default to
+1000 changes what gets snapshotted and restored, and a restore that silently
+reinstates 1000 bots mid-tournament would be a surprise nobody asked for —
+`WSG-BOT-MATCH.md` §9 documents a `--profile alive-world` fallback for when no
+snapshot exists, which implies a hardcoded value somewhere that is now stale.
+
+And 40 is no longer the target anyway. **The operating decision is that only the
+20 bots playing the current match are online; every other character, including
+the entire random pool, is offline.** A tournament profile that leaves 40 random
+bots thinking is 40 bots of single-core AI competing with the match nobody
+wanted running.
 
 **Suspected cause / area:** `docs/playerbots/wsg/wsg-mode.sh`, plus
 `docs/playerbots/TOURNAMENT-RUNNING.md`. Implements
@@ -27,17 +33,27 @@ implies there is a hardcoded value somewhere that is now wrong.
 - If a hardcoded fallback value is now inconsistent with the shipped
   `aiplayerbot.conf.dist.in` (1000/1000), it is either corrected to match or made
   to read the shipped conf — and the choice is justified in a comment.
+- **A tournament profile that takes the random pool to zero exists** — whether by
+  extending `wsg-mode.sh` (e.g. `on --tournament`) or by a documented conf
+  setting — so that only the 20 bots playing the current match are online. If
+  `MinRandomBots = MaxRandomBots = 0` turns out not to be a legal value for this
+  build, record what the lowest workable value actually is and say so rather than
+  quietly leaving it at 40.
+- **`rndbot add <name>` must still work with the pool at zero.** The tournament
+  characters are logged in explicitly by `roster.sh login`, not by the random
+  pool's auto-login, so the two should be independent — but that is an assumption
+  about this build, not a documented guarantee, and the whole design collapses if
+  a zero pool also refuses explicit adds. Verify it before writing it down.
 - `bash -n docs/playerbots/wsg/wsg-mode.sh` exits 0.
-- `docs/playerbots/TOURNAMENT-RUNNING.md` gains a section stating: the alive-world
-  pool defaults to 1000; `wsg-mode.sh on` drops it to 40 for the duration of a
-  match on purpose, because **bot AI is single-core** and 1000 bots thinking while
-  20 more play a battleground is a CPU contention problem, not a memory one
-  (memory at 1000 is comfortable — 4.27 GiB measured — so if a match degrades,
-  suspect the scheduler, not RSS); that `tournament-run.sh` does **not** manage
-  the pool, so `wsg-mode.sh on` before and `off` after are operator steps; and
-  that `wsg-mode.sh status` should be used to confirm the pool was actually
-  restored — a match left with the pool at 40 looks like a healthy server with a
-  mysteriously empty world.
+- `docs/playerbots/TOURNAMENT-RUNNING.md` gains a section stating: the
+  alive-world pool defaults to 1000; a tournament runs with it at **zero**, so
+  the only characters online are the 20 playing plus a GM spectator; that this is
+  a CPU decision, not a memory one — **bot AI is single-core**, while memory at
+  1000 bots is comfortable at 4.27 GiB measured, so a degraded match means the
+  scheduler, not RSS; that `tournament-run.sh` does **not** manage the pool, so
+  setting it before and restoring it after are operator steps; and that
+  `wsg-mode.sh status` confirms the restore — a world left at zero looks like a
+  healthy server that is mysteriously empty.
 
 **Notes:**
 

@@ -37,13 +37,35 @@ execution of the generator (artifact 021).
   TSV `slot<TAB>entry<TAB>name<TAB>itemLevel<TAB>quality`, a few candidates per
   required slot. It **proposes only** and never writes a tier file.
 - `scripts/tournament/gear-generate.sh [<class> <role>]` writes complete
-  **provisional** tier files (`"provisional": true`) with a `base` and an
-  `upgrade` tier, falling back from rare to uncommon rather than leaving a slot
-  empty, and failing loudly if some slot has no item at all for a class.
-- **`AllowableClass` is treated as a bitmask in every query**: class *N* is bit
-  `1 << (N-1)`, and `-1` means all classes. Comparing it against a class id
-  returns nonsense. `INVTYPE` 5 (chest) and 20 (robe) are the same slot and both
-  must be tried.
+  **provisional** tier files (`"provisional": true`) with `base` = **white
+  (`quality = 1`)** and `upgrade` = **green (`quality = 2`)**, failing loudly if
+  some slot has no item at all for a class. Uniform basic white in every slot is
+  the goal for the first tournament: completeness and fairness by construction,
+  with refinement deferred until matches are running.
+- **Every query uses this server's real column names, which are snake_case, not
+  the CamelCase the plan text assumes.** Measured 2026-08-16 against
+  `tw_world.item_template` (26,009 rows): the columns are `entry`, `class`,
+  `subclass`, `name`, `quality`, `inventory_type`, `allowable_class`,
+  `item_level`, `required_level`. `SELECT ... WHERE InventoryType = 1` fails
+  outright with `Unknown column 'InventoryType'` — as do `Quality`, `ItemLevel`,
+  `RequiredLevel` and `AllowableClass`. A comment at the top of each querying
+  script records this.
+- **Class fit is decided by armor `subclass`, not by `allowable_class`.**
+  Measured: of 1,940 white items in equippable slots, **1,818 are
+  `allowable_class = -1` (every class)** and only 122 are restricted. So
+  filtering on the bitmask alone would happily hand a mage a plate chest, which
+  then fails `CanEquipNewItem` on armor proficiency. Armor is `class = 4` with
+  `subclass` 1=cloth, 2=leather, 3=mail, 4=plate; map each class to what it can
+  actually wear — warrior/paladin plate, hunter/shaman mail, rogue/druid leather,
+  priest/mage/warlock cloth — and filter on that. Weapons (`class = 2`) are
+  filtered by weapon `subclass` for the same reason.
+- `allowable_class` is still honoured where it *is* restrictive: it is a bitmask,
+  class *N* is bit `1 << (N-1)`, and `-1` means all classes.
+- `inventory_type` 5 (chest) and 20 (robe) are the same slot and both must be
+  tried; 13 (one-hand), 17 (two-hand) and 21 (main-hand) all map to `mainhand`.
+- Only `required_level <= 60` is eligible. This world carries items with
+  `required_level` up to 100, so an unfiltered "highest item level" pick returns
+  gear no level-60 bot can equip.
 - `tests/fixtures/gear/warrior-tank.json` is committed: a complete, hand-written
   two-tier file used only by the tests.
 - `bash tests/tournament/gear.test.sh` prints `12 passed, 0 failed` and exits 0.
@@ -78,3 +100,14 @@ execution of the generator (artifact 021).
 - Item ids `13446` (Major Healing Potion) and `8952` (Roasted Quail) appear as
   the hardcoded consumables. They are unverified on this server; artifact 021's
   bulk existence check is where that gets settled.
+- **White gear coverage is measured and sufficient — do not re-derive it.**
+  Survey of `tw_world.item_template`, 2026-08-16, white items per slot:
+  head 134, neck 11, shoulders 85, chest 328 (+52 robe), waist 135, legs 165,
+  feet 208, wrists 154, hands 188, finger 18, trinket 42, back 93, one-hand
+  weapon 101 (+132 two-hand, +94 main-hand). Every armor slot has at least one
+  white item in **every** armor class, so all nine classes in the four shipped
+  teams can be fully dressed. The thinnest cell is white **plate waist: exactly
+  one item** — a generator that picks "best per slot" will select it for both
+  warriors and paladins, which is fine, but a generator that excludes it for any
+  reason leaves plate wearers with an empty belt. Neck, finger and trinket carry
+  no armor proficiency, so their low counts are not a constraint.

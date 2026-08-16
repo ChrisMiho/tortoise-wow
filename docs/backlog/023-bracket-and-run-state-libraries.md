@@ -44,11 +44,21 @@ Steps 1-2.
   `state_finish`.
 - **Every write is atomic**: write to a temp file, then rename. A partial write is
   a corrupt run that cannot be resumed, which defeats the point of persisting.
-- `state_record_result` eliminates the loser, and a `NONE` (draw) result
-  eliminates **nobody** — it is recorded and queryable, never silently advanced.
-  The recorded `round` is a JSON number, not a string (shell interpolation through
-  `jq` program text yields a string unless converted, and a string round breaks
-  every later numeric comparison).
+- `state_record_result <run-dir> <round> <allianceTeam> <hordeTeam> <winner>
+  [<decidedBy>]` eliminates the loser and records `decidedBy` on the result,
+  defaulting to `server`. The recorded `round` is a JSON number, not a string
+  (shell interpolation through `jq` program text yields a string unless
+  converted, and a string round breaks every later numeric comparison).
+- **`decidedBy` is what keeps the record honest.** A tournament that tiebreaks
+  0-0 draws produces winners the battleground never declared, and the state file
+  must never blur the two. `server` means the battleground returned that winner;
+  anything else (`tiebreak_score`, `tiebreak_deaths`, `tiebreak_seed`) means the
+  driver chose it. Both eliminate a team; only one is a result.
+- A `NONE` winner with no `decidedBy` still eliminates nobody, so the deadlock
+  path stays intact for any caller that does not tiebreak.
+- `state_get`/`jq` can filter on it — e.g. counting results where
+  `decidedBy != "server"` — so a run's report can say how many matches were
+  decided rather than won.
 - `bash tests/tournament/bracket.test.sh` prints `9 passed, 0 failed` and exits 0.
 - `bash tests/tournament/state.test.sh` prints `10 passed, 0 failed` and exits 0.
 - With both `lib/team.sh` and `lib/bracket.sh` sourced, `bracket_validate

@@ -38,6 +38,11 @@ directly.
   console-writing subcommand batches all its lines into **one** `wsg_console`
   call.
 - `bash tests/tournament/roster.test.sh` prints `11 passed, 0 failed` and exits 0.
+- **`roster.sh status` has been run once against the live database** and its
+  literal output recorded in the commit message, for both shipped teams. This is
+  read-only and needs only the database container, not a server image. A
+  `broken=` count above zero is a real finding about the current world — report
+  it, do not clean it up here.
 - `docs/playerbots/TOURNAMENT-ROSTERS.md` exists and states the alphabetic-name
   rule, the four commands, how to add a team, and that the roster does **not**
   come back on its own after a mangosd restart.
@@ -61,9 +66,10 @@ directly.
   `characters.online` lags reality by up to 60 s (`PlayerSave.Interval`). Poll
   with a deadline; do not read once and conclude.
 - A bot account holds at most 9 characters (`PlayerbotMgr.cpp:2325`).
-- **Verification needing a live stack (not part of these criteria):**
-  `roster.sh status stormwind-sentinels` reporting `present=10/10 broken=0`
-  against the real world, and a `logout` → `status` (`online=0/10`) → `login`
-  (`online=10/10`) cycle. Allow up to 60 s of stale `online` readings. Record the
-  real `broken=` count — anything above zero is a genuine finding about the
-  current world, not a test failure.
+- **Verification needing the full stack, deliberately left out of the criteria:**
+  `ensure`, `login` and `logout` need mangosd running, and `ensure` **creates 20
+  characters in the live world**. That is wanted eventually, but not as an
+  unannounced side effect of implementing a script, so it stays an operator step:
+  `logout` → `status` (expect `online=0/10`) → `login` (expect `online=10/10`),
+  allowing up to 60 s of stale `online` readings. These use `rndbot`, which
+  exists in the rollback-anchor image, so they do not need a fresh build.
