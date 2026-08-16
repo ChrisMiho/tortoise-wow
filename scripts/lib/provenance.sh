@@ -18,6 +18,7 @@ TW_LIVE_ROOT="${TW_LIVE_ROOT:-$HOME/tortoise-wow-server-V2}"
 TW_SRC_DIR="${TW_SRC_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}"
 TW_IMAGE="${TW_IMAGE:-tortoise-cm}"
 TW_MANGOSD="${TW_MANGOSD:-tcm-mangosd}"
+TW_DB="${TW_DB:-tcm-db}"
 TW_DB_VOLUME="${TW_DB_VOLUME:-tortoise-wow-v2_dbdata}"
 TW_WORLD_PORT="${TW_WORLD_PORT:-8095}"
 
@@ -92,4 +93,34 @@ prov_volume_exists()    { docker volume inspect "$1" >/dev/null 2>&1; }
 # pipeline yields 141 — so an `until ... grep -q` loop never terminates.
 prov_world_ready() {
     nc -z -w 3 127.0.0.1 "$TW_WORLD_PORT" >/dev/null 2>&1
+}
+
+# The image ID a tag resolves to right now. Empty when the tag does not exist.
+# Tags are mutable: comparing the tag a container was started with against the
+# tag you just built proves nothing, comparing IDs does.
+prov_image_id_for_tag() { # <tag>
+    local v
+    v=$(docker image inspect --format '{{.Id}}' "$1" 2>/dev/null) || return 0
+    printf '%s\n' "$v"
+}
+
+# A bound port only proves docker-proxy answered. The realm row is what the
+# client actually reads: realmflags=2 means offline, and a port disagreeing with
+# WorldServerPort makes the client hang after login, before character select.
+prov_realm_ok() {
+    local pass row
+    pass=$(tr -d '\r\n' < "$TW_LIVE_ROOT/.dbpass" 2>/dev/null) || return 1
+    [ -n "$pass" ] || return 1
+    row=$(docker exec -e MYSQL_PWD="$pass" "$TW_DB" mysql -uroot -N -B -e \
+            "SELECT CONCAT(port,':',realmflags) FROM tw_logon.realmlist LIMIT 1;" \
+            2>/dev/null | tr -d '\r')
+    [ "$row" = "${TW_WORLD_PORT}:0" ]
+}
+
+prov_online_count() {
+    local pass
+    pass=$(tr -d '\r\n' < "$TW_LIVE_ROOT/.dbpass" 2>/dev/null) || { echo 0; return 0; }
+    docker exec -e MYSQL_PWD="$pass" "$TW_DB" mysql -uroot -N -B -e \
+        "SELECT COUNT(*) FROM tw_char.characters WHERE online=1;" 2>/dev/null \
+        | tr -d '\r' | head -1
 }
