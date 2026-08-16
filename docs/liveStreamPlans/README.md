@@ -64,10 +64,16 @@ in `docs/playerbots/TOURNAMENT-CONTROL-PLANE.md` with literal console output.
 
 ## Feeding these to scope and drain
 
-**Start here:** [`HANDOFF.md`](HANDOFF.md) is a self-contained prompt for a fresh
-agent to do this scoping. It carries the environment prerequisites (`jq` is not
-installed), the split table, the human-only steps, and every trap found during
-planning. The rest of this section is the summary.
+Two handoff prompts exist, both self-contained for a fresh agent:
+
+- [`HANDOFF.md`](HANDOFF.md) — **scoping**: turn the plans into `docs/backlog/`
+  artifacts. Carries the environment prerequisites (`jq` is not installed), the
+  artifact split table, the human-only steps, and every trap found during planning.
+- [`HANDOFF-PLAN-00.md`](HANDOFF-PLAN-00.md) — **executing Plan 00 directly**, as
+  the supervised pilot. Plan 00 is the right first thing to run by hand: pure
+  infrastructure, no live-match dependency, and everything else depends on it.
+
+The rest of this section is the summary.
 
 These are implementation plans, not backlog artifacts. `backlog-drain` picks up
 artifacts in `docs/backlog/`, so each plan (or each task group within one) needs to

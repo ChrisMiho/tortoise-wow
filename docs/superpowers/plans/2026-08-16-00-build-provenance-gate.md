@@ -967,24 +967,39 @@ image, and `logs/` is runtime output.
 
 - [ ] **Step 3: Prove the context actually shrank**
 
-Create something in each directory, then measure what the build context sends:
+Create something in each directory, then measure what the build context sends.
+**Do not build the real Dockerfile for this** — it would spend ~10 minutes
+compiling to answer a question about bytes transferred. A throwaway `FROM scratch`
+Dockerfile consumes the same context and builds nothing:
 
 ```bash
 mkdir -p config/tournament/teams tests/tournament logs/tournament
 head -c 5000000 /dev/zero > logs/tournament/fake-bots.log
-docker build -t tortoise-cm:ctxtest --progress=plain . 2>&1 | grep -i "transferring context" | tail -2
+
+# with the fix in place
+docker build -f - --progress=plain . <<'EOF' 2>&1 | grep -i "transferring context" | tail -1
+FROM scratch
+EOF
+
+# and again with logs/ commented out of .dockerignore, for the before/after
+sed -i 's|^logs/$|#logs/|' .dockerignore
+docker build -f - --progress=plain . <<'EOF' 2>&1 | grep -i "transferring context" | tail -1
+FROM scratch
+EOF
+sed -i 's|^#logs/$|logs/|' .dockerignore
 ```
 
-Expected: the transferred context size does **not** include the 5 MB file. Compare
-against the same command with `logs/` temporarily removed from `.dockerignore` if
-you want the before/after directly.
+Expected: the second number is ~5 MB larger than the first. That difference is the
+fix working.
 
 Clean up:
 
 ```bash
-rm -rf logs/tournament/fake-bots.log
-docker rmi tortoise-cm:ctxtest 2>/dev/null || true
+rm -f logs/tournament/fake-bots.log
 ```
+
+Confirm `.dockerignore` is back to its fixed state before committing —
+`grep -n '^logs/$' .dockerignore` must match.
 
 - [ ] **Step 4: Commit**
 
