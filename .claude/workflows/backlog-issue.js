@@ -294,7 +294,21 @@ const reviews = await parallel(lenses.map((lens) => () =>
 
      Report every real finding with a one-sentence summary, the file it's in,
      and a severity of "blocking" or "minor". Return an empty findings array
-     if there's nothing to flag.`,
+     if there's nothing to flag.
+
+     IF YOUR REVIEW DIMENSION DOES NOT APPLY TO THIS DIFF AT ALL, an empty
+     findings array is the correct and complete answer. Most artifacts in this
+     backlog are entirely shell scripts, JSON config or documentation, and a
+     lens looking for pointer lifetime or lock discipline has nothing to say
+     about those -- that is expected, not a problem, and not a finding.
+
+     Do NOT reach for blocked: true to express it. blocked: true is a claim
+     about the ARTIFACT, not about your lens: it asserts that the artifact's
+     own acceptance criteria cannot be satisfied in this environment no matter
+     what anyone codes -- missing data, missing tooling, a decision only a
+     human can make. It halts the work and requires a human to triage it. A
+     lens that has merely found its own dimension irrelevant to the diff must
+     never set it.`,
     { phase: 'Review', label: `review:${lens.key}`, schema: REVIEW_SCHEMA, effort: 'medium' }
   )
 ))
