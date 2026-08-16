@@ -166,6 +166,16 @@ const built = await agent(
    docs/DOCKER.md) -- do not pass --build-arg BUILD_JOBS unless the build
    OOMs, in which case retry with --build-arg BUILD_JOBS=4.
 
+   Budget ~9.5 minutes and do not try to make it faster. There is NO incremental
+   build here: "COPY . /src" does not cache-hit across builds, so every build
+   recompiles all ~1169 translation units regardless of whether you changed one
+   file or a hundred. Everything downstream of that COPY is invalidated before
+   any cache is consulted, so no build-arg, cache mount or compiler cache can
+   help. ccache was implemented and measured on 2026-08-16 -- cold 9m07s, no-op
+   9m24s, one-file change 9m05s, zero cache hits in all three -- and reverted.
+   Do not re-add it, and do not report a build as "slow" or "hung" merely
+   because it recompiles everything; that is the normal, expected behaviour.
+
    You MUST pass the three provenance build args, exactly as scripts/rebuild.sh
    does. Without them the image carries no provenance labels, and
    scripts/validate-stack.sh can only ever return UNKNOWN against it -- meaning
@@ -234,13 +244,23 @@ const validated = await agent(
    gate script, which brings the stack up and refuses to report success unless
    provenance, image identity, and real liveness all pass:
 
-     <main-checkout>/scripts/validate-stack.sh --image ${imageTag} \\
-       --env-file <main-checkout>/.env --keep-up
+     TW_SRC_DIR=<worktree> <main-checkout>/scripts/validate-stack.sh \\
+       --image ${imageTag} --env-file <main-checkout>/.env --keep-up
 
    where <main-checkout> is the repository root of the ORIGINAL session
    directory, not this worktree -- .env is gitignored and exists only there.
    Resolve it with "git -C <worktree> worktree list": the FIRST entry is the
    main checkout. The script must be run from WSL, not Git Bash.
+
+   TW_SRC_DIR is NOT optional here. The gate compares the image's stamped
+   revision against HEAD of the repo it reads git from, which defaults to the
+   checkout the script lives in -- the main checkout. This image was built from
+   the worktree at "${integrated.integrationBranch}", whose HEAD is a different
+   commit, so without this override gate 1 reports DRIFT on every batch run and
+   nothing downstream is ever validated. Point it at the worktree and it
+   compares against the commit the image was actually built from. Compose still
+   runs from the main checkout, which is where docker-compose.yml and .env live,
+   so only the git comparison moves.
 
    Its last stdout line is "VALIDATE-STACK: PASS" or
    "VALIDATE-STACK: FAIL <reason>". Report that line verbatim in liveness.
