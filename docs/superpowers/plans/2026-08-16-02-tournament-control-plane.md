@@ -750,20 +750,28 @@ Today a result is a scraped `bg.log` line whose `duration` field includes up to
 120 s of post-match cleanup and therefore is not the match length. This makes the
 score a first-class read.
 
-- [ ] **Step 1: Confirm the score accessors before writing against them**
+- [ ] **Step 1: Know what the base class does and does not expose**
 
-The winner accessor and the per-team score accessor differ between forks. Check
-this tree:
+Verified in this tree, so the handler below can be written directly:
+
+| Accessor | Where | Note |
+|---|---|---|
+| `BattleGround::GetWinner()` | `BattleGround.h:323` | on the **base** class — safe on any `BattleGround*` |
+| `BattleGroundWS::GetTeamScore(Team)` | `BattleGroundWS.h:185` | **subclass only** |
+| `m_TeamScores[]` | `BattleGround.h:540` | a protected member, not an accessor |
+
+**`GetTeamScore` is not on the base class.** Calling `bg->GetTeamScore(ALLIANCE)`
+through a `BattleGround*` does not compile — the score has to come from a downcast
+once the type is known to be WSG. `BattleGroundBR` declares its own identical
+accessor (`BattleGroundBR.h:61`), so this is a per-subclass convention, not an
+oversight to be "fixed" by adding a base virtual as a side effect of this task.
+
+Confirm before writing:
 
 ```bash
-grep -n "GetWinner\|GetStatus\|WINNER_" src/game/Battlegrounds/BattleGround.h | head -20
-grep -n "GetTeamScore\|m_TeamScores" src/game/Battlegrounds/BattleGround.h | head -10
+grep -n "GetWinner" src/game/Battlegrounds/BattleGround.h
+grep -rn "GetTeamScore" src/game/Battlegrounds/*.h
 ```
-
-Use whatever this tree actually declares. If a per-team score accessor does not
-exist on the base class, emit `allianceScore=-1 hordeScore=-1` and note in the doc
-that flag captures must come from `bg.log` honor bursts instead — do **not** invent
-an accessor.
 
 - [ ] **Step 2: Add the handler**
 
@@ -794,11 +802,23 @@ bool ChatHandler::HandleTournamentResultCommand(char* args)
         default:              winner = "NONE";     break;
     }
 
+    // GetTeamScore lives on the subclass, not on BattleGround (see Step 1), so
+    // the score is only readable once the type is known. -1 means "this
+    // battleground type does not expose a score here", which is honest and
+    // distinguishable from a real 0-0.
+    int32 allianceScore = -1, hordeScore = -1;
+    if (bg->GetTypeID() == BATTLEGROUND_WS)
+    {
+        BattleGroundWS* ws = static_cast<BattleGroundWS*>(bg);
+        allianceScore = int32(ws->GetTeamScore(ALLIANCE));
+        hordeScore    = int32(ws->GetTeamScore(HORDE));
+    }
+
     std::ostringstream ss;
     ss << "result instance=" << instanceId
        << " winner=" << winner
-       << " allianceScore=" << bg->GetTeamScore(ALLIANCE)
-       << " hordeScore=" << bg->GetTeamScore(HORDE)
+       << " allianceScore=" << allianceScore
+       << " hordeScore=" << hordeScore
        << " status=" << TournamentStatusName(bg->GetStatus())
        << " elapsed=" << (bg->GetStartTime() / 1000);
     TournamentEmit(ss.str());
@@ -806,7 +826,7 @@ bool ChatHandler::HandleTournamentResultCommand(char* args)
 }
 ```
 
-Adjust `GetWinner()` / `GetTeamScore()` to the names Step 1 found.
+Add `#include "BattleGroundWS.h"` at the top of the file for the downcast.
 
 - [ ] **Step 3: Declare, register, build**
 
