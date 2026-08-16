@@ -68,8 +68,9 @@ lists, and adds the audit that would have caught it.
 | File | Responsibility |
 |---|---|
 | `scripts/tournament/gear-audit.sh` (create) | Report every empty/mismatched equipment slot for a team |
-| `scripts/tournament/gear-derive.sh` (create) | Propose candidate items per class/role/slot from `item_template` |
-| `config/tournament/gear/<class>-<role>.json` (create) | Reviewed tier definitions |
+| `scripts/tournament/gear-derive.sh` (create) | Propose candidate items per class/role/slot from `item_template`, for humans to read |
+| `scripts/tournament/gear-generate.sh` (create) | Write complete **provisional** tier files mechanically, so curation can be deferred |
+| `config/tournament/gear/<class>-<role>.json` (create) | Tier definitions — provisional at first, curated later |
 | `scripts/tournament/lib/gear.sh` (create) | Load and validate gear tier files |
 | `scripts/tournament/gear-apply.sh` (create) | Apply a tier to a bot or a whole team |
 | `tests/tournament/gear.test.sh` (create) | Unit tests for the library and slot mapping |
@@ -415,39 +416,190 @@ export GEAR_DIR="$ROOT/config/tournament/gear"
 Run: `bash tests/tournament/gear.test.sh`
 Expected: FAIL — `scripts/tournament/lib/gear.sh: No such file or directory`
 
-- [ ] **Step 3: Write the tier files**
+- [ ] **Step 3: Generate the tier files — do not hand-pick them yet**
 
-Create one file per class/role combination appearing in the two shipped teams:
+**Curation is deliberately deferred.** Hand-choosing ~312 item IDs (12 class/role
+combinations × 2 tiers × 13 slots) is judgement work that would block every plan
+downstream: `match-run.sh` gates a match on `gear-audit.sh` passing, so no complete
+gear means no match, which means no telemetry (Plan 05), no effects testing
+(Plan 06), no combat analysis (Plan 07), no camera (Plan 08) and no release
+(Plan 09).
 
-`warrior-tank`, `warrior-dps`, `paladin-tank`, `priest-healer`, `druid-healer`,
-`druid-tank`, `mage-dps`, `warlock-dps`, `hunter-dps`, `rogue-dps`,
-`shaman-healer`, `shaman-dps`.
+So generate a **provisional** set now, mechanically, and curate later. The file
+format does not change between provisional and curated — only the item IDs — so
+curation is a pure data edit against a working system, scoped as its own artifact
+(see "Deferred work" at the end of this plan).
 
-Each follows this shape. Fill the item IDs from `gear-derive.sh` output for that
-class, reviewing each pick — `base` from quality 3 (rare), `upgrade` from quality 4
-(epic) where one exists at level 60, otherwise the highest-item-level rare:
+Write `scripts/tournament/gear-generate.sh`:
+
+```bash
+#!/usr/bin/env bash
+# Generate PROVISIONAL gear tier files from item_template.
+#
+#   ./scripts/tournament/gear-generate.sh                    # every combo below
+#   ./scripts/tournament/gear-generate.sh warrior tank
+#
+# These are mechanically chosen, not curated: highest ItemLevel per slot at the
+# tier's quality. Good enough to make every bot fully dressed and every match
+# fair, which is what unblocks the rest of the plan series. Replacing the ids
+# with hand-picked ones later touches no code -- see the "Deferred work" section
+# of this plan.
+#
+# Every generated file carries "provisional": true so a curated file is
+# distinguishable at a glance and by grep.
+set -uo pipefail
+HERE="$(cd "$(dirname "$0")" && pwd)"
+ROOT="$(cd "$HERE/../.." && pwd)"
+# shellcheck source=/dev/null
+. "$ROOT/docs/playerbots/wsg/lib/wsg-bots-common.sh"
+
+OUT_DIR="${GEAR_DIR:-$ROOT/config/tournament/gear}"
+mkdir -p "$OUT_DIR"
+
+# class-name|classId|role, for every combination in the four shipped teams.
+COMBOS='warrior|1|tank
+warrior|1|dps
+paladin|2|tank
+hunter|3|dps
+rogue|4|dps
+priest|5|healer
+shaman|7|healer
+shaman|7|dps
+mage|8|dps
+warlock|9|dps
+druid|11|tank
+druid|11|healer'
+
+# InventoryType -> required slot. Mirrors gear-derive.sh's map and
+# GEAR_REQUIRED_NAMES in lib/gear.sh; all three must agree.
+SLOT_MAP='1|head
+2|neck
+3|shoulders
+5|chest
+6|waist
+7|legs
+8|feet
+9|wrists
+10|hands
+11|finger1
+12|trinket1
+16|back
+13|mainhand'
+
+# Best entry for one slot at one quality, or empty. AllowableClass is a BITMASK:
+# class N is bit 1<<(N-1), and -1 means every class.
+best_item() { # <invtype> <classId> <quality> [minItemLevel]
+    local invtype="$1" cls="$2" quality="$3" minIlvl="${4:-0}"
+    local mask=$(( 1 << (cls - 1) ))
+    wsg_mysql "SELECT entry FROM tw_world.item_template
+               WHERE InventoryType = $invtype
+                 AND Quality = $quality
+                 AND RequiredLevel BETWEEN 50 AND 60
+                 AND ItemLevel > $minIlvl
+                 AND (AllowableClass = -1 OR (AllowableClass & $mask) > 0)
+               ORDER BY ItemLevel DESC, entry ASC LIMIT 1;" | head -1
+}
+
+item_level() { # <entry>
+    [ -n "${1:-}" ] || { echo 0; return; }
+    wsg_mysql "SELECT ItemLevel FROM tw_world.item_template WHERE entry = $1;" | head -1
+}
+
+# INVTYPE 5 (chest) and 20 (robe) are the same slot; cloth casters mostly wear
+# 20, plate wearers only 5. Try the class's likely one, then the other.
+chest_for() { # <classId> <quality> [minIlvl]
+    local a b
+    a="$(best_item 5 "$1" "$2" "${3:-0}")"
+    b="$(best_item 20 "$1" "$2" "${3:-0}")"
+    if [ -n "$a" ] && [ -n "$b" ]; then
+        [ "$(item_level "$a")" -ge "$(item_level "$b")" ] && printf '%s' "$a" || printf '%s' "$b"
+    else
+        printf '%s' "${a:-$b}"
+    fi
+}
+
+generate_one() { # <className> <classId> <role>
+    local cname="$1" cid="$2" role="$3" f="$OUT_DIR/$1-$3.json"
+    local base_items="" up_items="" invtype slot id upid bl
+
+    while IFS='|' read -r invtype slot; do
+        [ -n "$slot" ] || continue
+
+        if [ "$slot" = "chest" ]; then id="$(chest_for "$cid" 3)"; else id="$(best_item "$invtype" "$cid" 3)"; fi
+        # Rare is the target, but not every slot has one for every class at 60.
+        # Falling back to uncommon keeps the tier COMPLETE, which is the property
+        # that matters -- a hole here is the exact bug this plan exists to fix.
+        [ -n "$id" ] || id="$(best_item "$invtype" "$cid" 2)"
+        if [ -z "$id" ]; then
+            echo "FATAL: no item at all for $cname-$role slot '$slot' (invtype $invtype)" >&2
+            echo "       Cannot generate a complete tier; investigate before continuing." >&2
+            return 1
+        fi
+
+        bl="$(item_level "$id")"
+        # Upgrade must be strictly better or the effect is a no-op the viewer
+        # paid for. Prefer epic; else a higher-ilvl rare; else keep the base item
+        # so the tier stays complete and the upgrade is simply flat in that slot.
+        if [ "$slot" = "chest" ]; then upid="$(chest_for "$cid" 4 "$bl")"; else upid="$(best_item "$invtype" "$cid" 4 "$bl")"; fi
+        [ -n "$upid" ] || upid="$(best_item "$invtype" "$cid" 3 "$bl")"
+        [ -n "$upid" ] || upid="$id"
+
+        base_items="$base_items${base_items:+,}\"$slot\":$id"
+        up_items="$up_items${up_items:+,}\"$slot\":$upid"
+    done <<< "$SLOT_MAP"
+
+    cat > "$f" <<JSON
+{
+  "class": "$cname",
+  "role": "$role",
+  "provisional": true,
+  "tiers": {
+    "base":    { "rank": 0, "items": { $base_items } },
+    "upgrade": { "rank": 1, "items": { $up_items } }
+  },
+  "consumables": [
+    { "itemId": 13446, "count": 20 },
+    { "itemId": 8952,  "count": 20 }
+  ]
+}
+JSON
+    jq . "$f" > "$f.fmt" && mv "$f.fmt" "$f"
+    echo "wrote $f"
+}
+
+rc=0
+if [ $# -eq 2 ]; then
+    cid="$(printf '%s\n' "$COMBOS" | awk -F'|' -v c="$1" '$1==c { print $2; exit }')"
+    generate_one "$1" "$cid" "$2" || rc=1
+else
+    while IFS='|' read -r cname cid role; do
+        [ -n "$cname" ] || continue
+        generate_one "$cname" "$cid" "$role" || rc=1
+    done <<< "$COMBOS"
+fi
+exit $rc
+```
+
+Then run it:
+
+```bash
+./scripts/tournament/gear-generate.sh
+```
+
+Expected: 12 files written under `config/tournament/gear/`, each valid JSON with
+no `0` values and `"provisional": true`.
+
+A curated file looks identical except that `provisional` is `false` and the ids
+were chosen by a person. The shape below is what both produce:
 
 ```json
 {
   "class": "warrior",
   "role": "tank",
+  "provisional": true,
   "tiers": {
-    "base": {
-      "rank": 0,
-      "items": {
-        "head": 0, "neck": 0, "shoulders": 0, "chest": 0, "waist": 0,
-        "legs": 0, "feet": 0, "wrists": 0, "hands": 0, "finger1": 0,
-        "trinket1": 0, "back": 0, "mainhand": 0
-      }
-    },
-    "upgrade": {
-      "rank": 1,
-      "items": {
-        "head": 0, "neck": 0, "shoulders": 0, "chest": 0, "waist": 0,
-        "legs": 0, "feet": 0, "wrists": 0, "hands": 0, "finger1": 0,
-        "trinket1": 0, "back": 0, "mainhand": 0
-      }
-    }
+    "base":    { "rank": 0, "items": { "head": 12640, "neck": 0, "...": 0 } },
+    "upgrade": { "rank": 1, "items": { "head": 16963, "neck": 0, "...": 0 } }
   },
   "consumables": [
     { "itemId": 13446, "count": 20 },
@@ -456,12 +608,11 @@ class, reviewing each pick — `base` from quality 3 (rare), `upgrade` from qual
 }
 ```
 
-Every `0` must be replaced with a real `entry`. Task 4 Step 2 verifies that every
-id exists and is equippable, so a leftover `0` fails there rather than silently
-shipping.
+(Abbreviated — the generator writes all 13 required slots in both tiers. `0` and
+`"..."` never appear in a generated file; `gear_validate` rejects a `0` outright.)
 
 `13446` is Major Healing Potion and `8952` is Roasted Quail — confirm both exist on
-this server with the query in Task 4 Step 2 before relying on them.
+this server with the query in Task 4 Step 1 before relying on them.
 
 - [ ] **Step 4: Write the library**
 
@@ -894,3 +1045,75 @@ git commit -m "feat(tournament): consumables via tournament store, and document 
   slot's `itemEntry` in `character_inventory`.
 - `docs/playerbots/TOURNAMENT-GEAR.md` records the `InitEquipment` root cause with
   file:line references.
+
+**Tier files may still be `"provisional": true` when this plan is done.** That is
+the intended state — see below.
+
+---
+
+## Deferred work: curating the tier files
+
+This plan finishes with mechanically-generated tiers. Curation is a **separate,
+later artifact** and is deliberately not a blocker.
+
+**Why it can be deferred safely.** Nothing downstream reads item IDs — it reads the
+*file*. `gear-apply.sh`, the `upgrade_armor_*` / `upgrade_weapon_*` effects, and
+`match-run.sh`'s gear gate all work identically against provisional and curated
+files, because the only thing that changes is which integers sit in `.tiers[].items`.
+The properties everything actually depends on are enforced by `gear_validate`
+regardless of who chose the numbers:
+
+- every required slot is present in every tier (no holes — the bug being fixed)
+- no placeholder `0` survives
+- tier `rank`s are unique, so `gear_next_tier` is deterministic
+- every id resolves in `item_template` and is equippable (Task 4 Step 1)
+
+**What curation buys, and what it does not.** It does not make matches work — they
+already will. It buys *plausibility*: a mechanically-picked "highest ItemLevel at
+this quality" set can produce items that are statistically fine but thematically
+odd, or that ignore set bonuses, resistances and stat weighting entirely. For a
+tournament people watch and cheer for, "the Ironforge Anvils' tank is in a coherent
+tank set" is a presentation property. Defer it until the tournament runs; it reads
+very differently once you can watch a match and see what looks wrong.
+
+**Scope the follow-up artifact roughly like this:**
+
+```markdown
+---
+status: pending
+risk: low
+area: playerbots/gear
+depends-on: <the artifact that implements this plan>
+---
+
+# Curate the provisional gear tiers
+
+**Problem:** `config/tournament/gear/*.json` were generated mechanically by
+`gear-generate.sh` — highest ItemLevel per slot at the tier's quality — and carry
+`"provisional": true`. They make every bot fully dressed, which is what unblocked
+the tournament, but they ignore stat weighting, set bonuses and resistances, and
+some picks will look wrong on screen.
+
+**Suspected cause / area:** not a defect — deferred work. `gear-generate.sh` and
+`gear-derive.sh` both exist; the latter prints ranked candidates per slot for
+review.
+
+**Acceptance criteria:**
+- Every file has `"provisional": false`.
+- `./scripts/tournament/team-validate.sh` and `bash tests/tournament/gear.test.sh`
+  still pass, and `gear-audit.sh` still reports `complete=10/10` for every team
+  after `gear-apply.sh`.
+- For each class/role, the `upgrade` tier is strictly better than `base` in at
+  least 8 of the 13 required slots, by ItemLevel.
+- Picks are justified in one line per class/role in
+  `docs/playerbots/TOURNAMENT-GEAR.md` — the reasoning is the deliverable as much
+  as the ids are.
+
+**Notes:** Pure data change; no script or C++ edits. Use
+`gear-derive.sh <classId> <quality>` for candidates. Verify every id with the
+bulk existence query in Plan 03 Task 4 Step 1 before committing.
+```
+
+A second thing worth deferring the same way: `gear-generate.sh` picks consumables
+from a hardcoded pair (Major Healing Potion, Roasted Quail) for every class. A
+mage wants mana potions and a warrior does not. Fold that into the same artifact.
