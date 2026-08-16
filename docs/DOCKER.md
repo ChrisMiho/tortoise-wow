@@ -183,11 +183,35 @@ docker compose up -d
 
 Set `TW_IMAGE` back to `tortoise-cm:local` once you have rebuilt a good image.
 
+### Current state: fresh slate as of 2026-08-16
+
+Every image was deleted to start the tournament work clean — 30 images and one
+stale build container, ~75 GB. **`tortoise-cm:c06b2fb` is the only image left**,
+kept deliberately as the rollback anchor, and `.env` points `TW_IMAGE` at it
+because `tortoise-cm:local` no longer exists.
+
+Consequences worth knowing before the first build:
+
+- The first build re-pulls `debian:trixie` and `mariadb:10.6`. Data is unaffected
+  — characters live in the `tortoise-wow-v2_dbdata` volume, not in any image —
+  but it needs internet and adds a few minutes.
+- Build time is unchanged at ~9.5 minutes. Nothing deleted was making builds
+  faster: the build cache was already empty, and `COPY . /src` never cache-hits
+  regardless.
+- Point `TW_IMAGE` back at `tortoise-cm:local` after the first successful
+  `scripts/rebuild.sh`, which recreates that tag.
+
+**Retire the anchor once, deliberately.** When the tournament work produces an
+image that passes `./scripts/validate-stack.sh --image <tag>`, `c06b2fb` has done
+its job and the last 2.3 GB can go. Until then it is the only way back to a
+working server — do not delete it to save space.
+
 ## Things that will cost you an afternoon
 
 | | |
 |---|---|
 | **`docker compose down -v`** | Destroys `tortoise-wow-v2_dbdata` — every character and all progression. The volume is declared `external` so compose cannot recreate it silently, but `-v` still removes it. Never run it. |
+| **Any "clean up unused volumes"** | Same destruction, different door: `docker volume prune`, `docker system prune --volumes`, or Docker Desktop's cleanup button. When the stack is down, Docker reports `tortoise-wow-v2_dbdata` as **100% reclaimable**, because "unused" means "no running container", not "no data". Deleting *images* is always safe; deleting volumes is never safe. Prune images with `docker image prune` (no `-a`, which would take the rollback anchor). |
 | Line endings | This checkout must stay LF (`git config core.autocrlf false`). A CRLF tree compiles, but produces different bytes than the tree the proven image came from. |
 | `BUILD_PLAYERBOTS` | Defaults `OFF`. A build without it yields a bot-free server with no warning. Check: `docker run --rm tortoise-cm:local ls /opt/turtle/etc \| grep aiplayerbot`. |
 | **A rebuild that produces no binary** | `scripts/rebuild.sh` checks that `mangosd`/`realmd` exist before checking that they link — `ldd` on a missing file writes to stderr, so a naive `ldd \| grep 'not found'` reports a missing binary as healthy. Do not "simplify" the `test -x` check or the `2>&1` out of that loop. |

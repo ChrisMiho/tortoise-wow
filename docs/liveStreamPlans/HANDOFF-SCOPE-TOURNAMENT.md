@@ -15,6 +15,13 @@ quietly or claims a success it did not earn.
 Branch: `feature/tournament-backlog-scope`, cut from `origin/cm-main` at
 `55cff54` (the merge of PR #21, which is what put Plan 00 on the trunk).
 
+**Docker is at a deliberate fresh slate** (2026-08-16): every image was deleted
+except the rollback anchor `tortoise-cm:c06b2fb`, and `.env` points `TW_IMAGE` at
+it. Scoping does not build anything, so this does not affect your work — but do
+not scope artifacts whose acceptance criteria assume a pre-existing image, and
+expect the first drain build to re-pull base images. See `docs/DOCKER.md`,
+"Current state: fresh slate".
+
 ---
 
 ## Your task
