@@ -891,10 +891,228 @@ git commit -m "docs: document the validate-stack.sh provenance gate"
 
 ---
 
+### Task 8: Keep the new directories out of the build context
+
+**Files:**
+- Modify: `.dockerignore`
+
+**Interfaces:**
+- Consumes: nothing.
+- Produces: a build context that does not include `config/`, `tests/`, or `logs/`.
+
+The tournament plans create three new root directories. None affects the compiled
+binary, and none is currently excluded — so editing a team JSON or a test script
+would invalidate the `COPY . /src` layer and cost a full ~10 minute recompile. This
+task must land **before** Plan 01, which creates the first of them.
+
+`logs/` is the urgent one: `logs/tournament/` accumulates telemetry CSVs and
+captured `bots-match.log` files, so leaving it in the context means uploading a
+growing pile of match artifacts on every single build.
+
+- [ ] **Step 1: Confirm none of the three is excluded yet**
+
+```bash
+grep -nE "^(config|tests|logs)/?$" .dockerignore; echo "exit=$?"
+```
+
+Expected: no output and `exit=1` — nothing matched, which is the gap.
+
+- [ ] **Step 2: Add them**
+
+In `.dockerignore`, in the block that already begins
+`# Churny paths that have no business in the build context:`, add:
+
+```
+config/
+tests/
+logs/
+```
+
+The existing comment in that block already states the rationale — "anything here
+that changes still forces a full recompile of the `COPY . /src` layer even though
+none of it affects the compiled binary" — and these three are exactly that.
+`config/tournament/` is read by shell scripts at runtime, `tests/` never enters the
+image, and `logs/` is runtime output.
+
+- [ ] **Step 3: Prove the context actually shrank**
+
+Create something in each directory, then measure what the build context sends:
+
+```bash
+mkdir -p config/tournament/teams tests/tournament logs/tournament
+head -c 5000000 /dev/zero > logs/tournament/fake-bots.log
+docker build -t tortoise-cm:ctxtest --progress=plain . 2>&1 | grep -i "transferring context" | tail -2
+```
+
+Expected: the transferred context size does **not** include the 5 MB file. Compare
+against the same command with `logs/` temporarily removed from `.dockerignore` if
+you want the before/after directly.
+
+Clean up:
+
+```bash
+rm -rf logs/tournament/fake-bots.log
+docker rmi tortoise-cm:ctxtest 2>/dev/null || true
+```
+
+- [ ] **Step 4: Commit**
+
+```bash
+git add .dockerignore
+git commit -m "build: keep config/, tests/ and logs/ out of the build context
+
+None affects the compiled binary, but all three would invalidate the
+COPY . /src layer and force a full ~10 minute recompile on every edit."
+```
+
+---
+
+### Task 9 (optional): ccache, for the ~12 rebuilds these plans require
+
+**Files:**
+- Modify: `Dockerfile` (build stage)
+- Modify: `docs/DOCKER.md`
+
+**Interfaces:**
+- Produces: a build stage that reuses compiled objects across builds via a BuildKit
+  cache mount, so a one-file C++ change does not recompile the whole tree.
+
+**This task is a genuine speedup, not a cleanup — but it is optional, and it must
+be measured rather than assumed.** Skip it if the plan sequence is already
+underway; do not retrofit it mid-run, because it changes `DOCKERFILE_SHA` and every
+image built before it will then report the "Dockerfile changed" warning from
+`verify-running-commit.sh`.
+
+The case for it: the tournament plans invoke `./scripts/rebuild.sh` **12 times**
+(6 in Plan 02, 1 each in Plans 03/05/06, 2 in Plan 08), before any retries. At
+~9.5 minutes each that is ~1h54m of compiling, and almost all of it is recompiling
+translation units that did not change — because `COPY . /src` invalidates the build
+layer on any source edit, and there is currently no object reuse of any kind.
+
+- [ ] **Step 1: Confirm BuildKit is active**
+
+Cache mounts are a BuildKit feature. It is the default in Docker 23+, but confirm
+rather than assume:
+
+```bash
+docker version --format '{{.Server.Version}}'
+DOCKER_BUILDKIT=1 docker build --help | grep -c "mount"
+```
+
+If BuildKit is not available, **stop** — the rest of this task does not apply, and
+the fallback (a persistent named volume for ccache) does not work with
+`docker build` at all.
+
+- [ ] **Step 2: Add ccache to the build stage**
+
+In `Dockerfile`, add `ccache` to the builder's `apt-get install` list:
+
+```dockerfile
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      build-essential cmake git ccache \
+      libace-dev libboost-all-dev \
+      default-libmysqlclient-dev libssl-dev zlib1g-dev libbz2-dev \
+ && rm -rf /var/lib/apt/lists/*
+```
+
+and replace the configure/build `RUN` with a cache-mounted version:
+
+```dockerfile
+# ccache on a BuildKit cache mount. COPY . /src invalidates this layer on ANY
+# source edit, so without object reuse every rebuild recompiles the entire tree
+# -- ~9.5 minutes to apply a one-line change. The cache mount survives layer
+# invalidation, so unchanged translation units become cache hits.
+#
+# The cache lives in the BuildKit builder, NOT in the image: it adds nothing to
+# the shipped layers and never reaches the runtime stage.
+ENV CCACHE_DIR=/ccache
+RUN --mount=type=cache,target=/ccache \
+    cmake -B /build -S /src \
+      -DCMAKE_BUILD_TYPE=Release \
+      -DCMAKE_INSTALL_PREFIX=/opt/turtle \
+      -DBUILD_PLAYERBOTS=ON \
+      -DUSE_EXTRACTORS=ON \
+      -DALLOW_TURTLE_ADDONS=ON \
+      -DCMAKE_C_COMPILER_LAUNCHER=ccache \
+      -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
+ && ccache --zero-stats \
+ && cmake --build /build -j"${BUILD_JOBS}" \
+ && cmake --install /build \
+ && ccache --show-stats
+```
+
+`ccache --show-stats` at the end is not decoration: it is how the next step gets
+its measurement, and it is printed in the build log where a reviewing agent can
+read it.
+
+- [ ] **Step 3: Measure it — three builds, not one**
+
+A single build proves nothing; the first build populates the cache and will be
+*slower* than the current baseline, not faster.
+
+```bash
+# 1. cold — populates the cache. Expect roughly baseline, or a little worse.
+time ./scripts/rebuild.sh
+
+# 2. no-op — same source. Should be near-total cache hits.
+time ./scripts/rebuild.sh
+
+# 3. one-file change — the case that actually matters.
+touch src/game/Commands/Commands.cpp
+time ./scripts/rebuild.sh
+```
+
+Record all three wall times and the `cache hit rate` line from each build's
+`ccache --show-stats` output.
+
+**Decide from the third number.** If a one-file change still takes close to the
+~9.5 minute baseline, ccache is not helping here — revert the Dockerfile change
+rather than keeping a complication that buys nothing. Report the measured numbers
+either way; "it should be faster" is not a result.
+
+- [ ] **Step 4: If kept, document it**
+
+Add to `docs/DOCKER.md`, in the "Rebuild after a C++ change" section:
+
+```markdown
+Builds use ccache on a BuildKit cache mount, so a rebuild that changes one file
+recompiles only what depends on it. Measured on this host: cold <X>, no-op <Y>,
+one-file change <Z>. The cache lives in the BuildKit builder, not in the image.
+
+Clear it if you ever suspect a stale object:
+
+    docker builder prune --filter type=exec.cachemount
+```
+
+Fill in the real measured numbers from Step 3 — do not ship the placeholders.
+
+- [ ] **Step 5: Expect one Dockerfile-drift warning, once**
+
+`scripts/rebuild.sh` stamps `com.turtle.dockerfile-sha256`, and
+`verify-running-commit.sh` warns when a running image's stamp differs from the
+current file. Changing the Dockerfile means the **currently running** server now
+trips that warning until it is rebuilt. That is correct behaviour, not a
+regression — note it in the commit message so the next person does not chase it.
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add Dockerfile docs/DOCKER.md
+git commit -m "build: ccache on a BuildKit cache mount
+
+Cold <X>, no-op <Y>, one-file change <Z> (was ~9m20s for every build
+regardless of what changed). The running server will report a Dockerfile
+drift warning until it is next rebuilt; that is expected."
+```
+
+---
+
 ## Done when
 
 - `bash tests/lib/assert.selftest.sh`, `bash tests/provenance.test.sh`, and
   `bash tests/validate-stack.test.sh` all exit 0.
+- `.dockerignore` excludes `config/`, `tests/` and `logs/`, verified by a build
+  whose transferred context does not include a file planted under `logs/`.
 - `./scripts/validate-stack.sh --image tortoise-cm:local` reaches a **definite**
   verdict — `PASS`, or a `FAIL` naming a specific gate. Never `UNKNOWN`.
 - A hand-run build following the new Build-phase instructions produces an image

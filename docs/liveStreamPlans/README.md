@@ -72,8 +72,32 @@ drains better, because a failed artifact is retried whole.
 - `docs/backlog/README.md`'s prerequisites still apply: authenticated `gh`, a
   supervised pilot run, and a human watching the first real ticks and the first
   batch.
-- Plans 02, 03, 05, 06 and 08 each contain multiple `./scripts/rebuild.sh` cycles at
-  ~9-10 minutes apiece, plus stack restarts. Budget accordingly.
+- These plans invoke `./scripts/rebuild.sh` **12 times** (6 in Plan 02, 1 each in
+  03/05/06, 2 in Plan 08), before retries — roughly 1h54m of compiling at the
+  current ~9m20s per build.
+
+### About build times
+
+The fast build profile is **already on and already the default**: `.wslconfig` at
+16 CPU / 24 GB, `ARG BUILD_JOBS=10` (`Dockerfile:30`), and `backlog-batch.js`
+already tells agents not to override it. That took the build from ~40 minutes to a
+measured 9m20s — see
+[`2026-08-14-docker-build-speedup-handoff.md`](../superpowers/plans/2026-08-14-docker-build-speedup-handoff.md).
+There is nothing to switch on, and **nothing should pass `--build-arg BUILD_JOBS`**
+unless a build OOMs, in which case retry at 4. The bound is memory per translation
+unit (~1-2 GB), not CPU count.
+
+Two further levers, both in Plan 00:
+
+- **Task 8 (required):** `config/`, `tests/` and `logs/` — all created by these
+  plans — are not in `.dockerignore`, so editing a team JSON or a test would
+  invalidate `COPY . /src` and force a full recompile for a change that cannot
+  affect the binary. This must land before Plan 01.
+- **Task 9 (optional):** there is no ccache and no object reuse, so every rebuild
+  compiles the whole tree even for a one-line change. Task 9 adds ccache on a
+  BuildKit cache mount and measures whether it actually helps. Do it before
+  starting the sequence or not at all — retrofitting mid-run changes
+  `DOCKERFILE_SHA` and makes every earlier image report drift.
 - Plan 04's live verification runs real matches at up to 25 minutes each.
 - **This host reboots itself overnight for Windows Update.** Every long-running step
   in these plans writes results to disk as it goes, and Plan 04's tournament state is
