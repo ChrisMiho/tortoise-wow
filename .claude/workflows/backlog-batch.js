@@ -164,8 +164,27 @@ const built = await agent(
    bakes in -DBUILD_PLAYERBOTS=ON -DCMAKE_INSTALL_PREFIX=/opt/turtle and a
    BUILD_JOBS default of 10 (the Docker VM is now 16 CPUs/24GB, see
    docs/DOCKER.md) -- do not pass --build-arg BUILD_JOBS unless the build
-   OOMs, in which case retry with --build-arg BUILD_JOBS=4. Tag the resulting
-   image ${imageTag}.
+   OOMs, in which case retry with --build-arg BUILD_JOBS=4.
+
+   You MUST pass the three provenance build args, exactly as scripts/rebuild.sh
+   does. Without them the image carries no provenance labels, and
+   scripts/validate-stack.sh can only ever return UNKNOWN against it -- meaning
+   nobody can prove the server that gets validated was built from this repo:
+
+     GIT_SHA        = git -C <worktree> rev-parse --short HEAD
+     GIT_DIRTY      = git -C <worktree> status --porcelain --untracked-files=no | wc -l
+     DOCKERFILE_SHA = sha256sum <worktree>/Dockerfile | cut -c1-12
+
+   So the command is:
+
+     docker build -t ${imageTag} \\
+       --build-arg GIT_SHA=<sha> \\
+       --build-arg GIT_DIRTY=<count> \\
+       --build-arg DOCKERFILE_SHA=<dfsha> \\
+       <worktree>
+
+   An empty GIT_SHA stamps the image "unknown" -- check it is non-empty BEFORE
+   starting a ~10 minute compile, and fail immediately if it is empty.
 
    Run "docker build" itself from Windows PowerShell directly against that
    worktree's path -- the build context is just the repo directory and needs
