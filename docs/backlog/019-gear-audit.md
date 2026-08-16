@@ -41,12 +41,16 @@ dressed team and a half-dressed one is rigged without anyone noticing.
 - **Run once against the live database and record the literal output** in the
   commit message: `./scripts/tournament/gear-audit.sh stormwind-sentinels` and
   the same for `orgrimmar-warsong`. This is read-only and needs no server image —
-  `docker compose --env-file <main-checkout>/.env up -d db` is enough. Whatever
-  it reports is the answer: `complete=0/10` confirms the naked-bot behaviour this
-  artifact exists to measure, `complete=10/10` means the problem is narrower than
-  believed, and characters reported `missing` means the roster has not been
-  created yet. **All three are valid results — report which one happened rather
-  than adjusting anything to produce a particular number.**
+  `docker compose --env-file <main-checkout>/.env up -d db` is enough.
+- **The expected answer is already known, so this doubles as a correctness check
+  on the script.** Measured directly against `character_inventory` on
+  2026-08-16, counting the 13 required slots: `stormwind-sentinels
+  complete=4/10`, `orgrimmar-warsong complete=5/10`. Per-bot filled counts —
+  Alliance: one 6, two 5, three 12, four 13, five 11, six 13, seven 5, eight 13,
+  nine 12, ten 13. Horde: one 7, two 13, three 12, four 13, five 12, six 13,
+  seven 7, eight 13, nine 5, ten 13. **If the script disagrees with those
+  numbers, the script is wrong** — most likely its slot set or its join. Report
+  the discrepancy rather than accepting the script's answer.
 
 **Notes:**
 

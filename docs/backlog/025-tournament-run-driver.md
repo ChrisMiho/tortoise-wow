@@ -34,7 +34,9 @@ entire night's matches instead of one match.
   - `TOURNAMENT-RUN bracket=<id> status=failed reason=no_result(<a> vs <h>)` when
     `match-run.sh` returns no `winner=`.
 - **A draw is broken by tiebreak, not by blocking**, so a 0-0 match cannot end an
-  unattended run. On `winner=NONE` the driver walks this ladder in order and
+  unattended run. This is not a hypothetical: of the 37 matches recorded in
+  `bg.log` as of 2026-08-16, **15 were draws — 41%** (the other 22 split 16
+  Alliance / 6 Horde). A blocking driver would stall roughly two rounds in five. On `winner=NONE` the driver walks this ladder in order and
   stops at the first rung that separates the teams:
   1. **Higher score** — `allianceScore` / `hordeScore` from the `MATCH` line. In
      WSG the score *is* flag captures, so this rung is "who capped more". Skip it

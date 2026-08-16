@@ -22,6 +22,14 @@ item choice rather than a broken command.
 
 - `scripts/tournament/gear-apply.sh team <team-id> [--tier <name>]` applies each
   member's class/role tier, defaulting to the team's own `.gearTier`.
+- **It applies to every bot on the team, not only the under-dressed ones**, so
+  both teams end up identically kitted and no match is decided by gear. Existing
+  items are replaced — `tournament equip` calls `CanEquipNewItem` with
+  `swap = true` precisely because the slot is expected to be occupied. This is
+  intended and is why the tier is uniform basic white: measured 2026-08-16, only
+  9 of the 20 existing bots were fully dressed (stormwind-sentinels 4/10,
+  orgrimmar-warsong 5/10, worst bots at 5 of 13 required slots), so "top up the
+  gaps" would leave two teams wearing materially different gear.
 - `scripts/tournament/gear-apply.sh player <team-id> <slot> [--tier <name>]`
   applies to exactly one bot, resolved as `namePrefix + slot`.
 - `--with-consumables` additionally issues `tournament store <name> <itemId>

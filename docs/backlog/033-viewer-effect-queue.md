@@ -47,6 +47,12 @@ and a live channel before any of it could be tested.
   nothing else; everything downstream reads the file. That boundary is exactly why
   this pass builds no OAuth — the effects can be tested end to end with no
   credentials and no live channel.
+- **It is also the primary human interface for validating effects, not just a
+  test fixture**, so it has to be pleasant to drive by hand: a usage line that
+  names all eight effects, and an error on a bad `--effect`, `--team` or `--slot`
+  that says what the valid values are rather than only that the input was
+  rejected. Platform integration comes later, once the idea has been exercised
+  locally — this script is what that exercising is done with.
 - This artifact extends `tests/tournament/effects.test.sh` (artifacts 031-032),
   which is why it stacks on 032. All 11 existing assertions must still pass.
 - No server and no build are involved.

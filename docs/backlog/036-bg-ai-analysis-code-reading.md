@@ -65,6 +65,15 @@ Implements `docs/superpowers/plans/2026-08-16-07-bg-combat-analysis.md` Tasks 1-
   true under a realistic match state, and **is it reachable from `Execute`'s
   branch order at all**. An unreachable correct function is the same as a broken
   one from the match's point of view.
+- **The symptom is already measured — do not re-derive it, and do not run a match
+  to obtain it.** `bg.log` holds 37 completed WSG matches as of 2026-08-16:
+  **16 Alliance, 6 Horde, 15 draws.** So 41% end scoreless, and the decisive
+  matches carry a 2.7:1 Alliance skew on a 22-match sample. The draw rate is the
+  headline evidence for the commented-out flag-carrier triggers. The faction skew
+  is a second, independent lead: Step 3's `wsgPaths` question asks whether both
+  factions have symmetric waypoint coverage, and asymmetric path data is exactly
+  what a persistent one-sided skew would look like. Report the sample size
+  alongside any ratio — 22 decisive matches is suggestive, not conclusive.
 - Start from the current frontier rather than rediscovering it. Already
   established: `BGJoinAction::isUseful()` re-rolled a hardcoded 20% tank/healer
   gate over a queue choice the operator had already made, and
