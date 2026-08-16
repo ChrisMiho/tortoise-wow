@@ -86,6 +86,47 @@ does not read the plans and does not infer order. So:
   block in `docs/backlog/README.md`, and files present, taking the highest.
 - **Bump the counter block** as you go, in the same commit as the artifact.
 
+## Stacking, and the prerequisite that blocks it
+
+The intent is that these features build **on top of each other**, each one
+testable and verifiable in the tree it will actually ship in, so integration
+problems surface as the work progresses rather than all at once at merge time.
+
+`backlog-drain` already does this: it resolves an artifact's base to its
+dependency's own `backlog/<slug>` branch when `depends-on:` is set and that
+dependency's PR has not merged yet — targeted stacking, not a fresh `cm-main`
+cut every tick. **So set `depends-on:` accurately and stacking follows
+automatically.** That is the mechanism; there is nothing to build.
+
+**Stack on real dependencies only. Do NOT chain all ~49 artifacts one on top of
+the next.** In a chain that deep every PR must merge in strict order, and one
+rejected artifact in the middle forces a rebase of everything above it — which
+defeats the point of catching issues early. Independent artifacts should cut
+fresh so their PRs can merge in any order.
+
+**PREREQUISITE — check this before scoping anything, and tell the human if it is
+still true.** A valid base branch is only `cm-main` or `backlog/<slug>`
+(`BASE_BRANCH_PATTERN` in `.claude/workflows/backlog-issue.js`). As of
+2026-08-16, `origin/cm-main` does **not** contain Plan 00:
+
+- `scripts/validate-stack.sh` — missing
+- `tests/lib/assert.sh` — missing
+- `.dockerignore` exclusions for `config/`, `tests/`, `logs/` — missing
+
+Plan 00 Task 8 states its `.dockerignore` fix **must land before Plan 01 creates
+`config/`**, and Plan 01 is the first thing being scoped here. So
+`feature/bot-tournament-plans` needs to be merged into `cm-main` first, or the
+first artifact is cut from a tree missing the foundation everything else assumes.
+
+Verify with:
+
+```bash
+git ls-tree -r --name-only origin/cm-main -- scripts/validate-stack.sh
+git show origin/cm-main:.dockerignore | grep -E '^(config|tests|logs)/$'
+```
+
+If those come back empty, **stop and raise it** rather than scoping around it.
+
 ## Acceptance criteria must be checkable without a human
 
 The drain runs unattended. Every acceptance criterion must be something an agent
