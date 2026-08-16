@@ -186,6 +186,14 @@ const built = await agent(
    An empty GIT_SHA stamps the image "unknown" -- check it is non-empty BEFORE
    starting a ~10 minute compile, and fail immediately if it is empty.
 
+   Run the build in the FOREGROUND and wait for it (~10 minutes). Do NOT
+   background it, nohup it, or detach it. "docker build" streams from a client
+   the daemon watches, so killing the client cancels the build -- a backgrounded
+   build dies partway through and leaves no image and no error, just a truncated
+   log. nohup does not help: WSL tears down the session's processes when the
+   wsl.exe that started them exits. This has bitten more than one agent on this
+   host; see docs/DOCKER.md, "Things that will cost you an afternoon".
+
    Run "docker build" itself from Windows PowerShell directly against that
    worktree's path -- the build context is just the repo directory and needs
    no WSL path semantics. Do NOT use a wrapped "wsl -d Ubuntu -- bash -lc

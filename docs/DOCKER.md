@@ -56,6 +56,30 @@ server down with it.
 BUILD_JOBS=4 ./scripts/rebuild.sh    # if the Docker VM OOMs mid-compile
 ```
 
+**Run this in the foreground and wait for it.** Do not background it, `nohup` it,
+or detach it — see "Things that will cost you an afternoon" below. A backgrounded
+build is cancelled partway through and leaves nothing behind.
+
+Every build recompiles the entire tree — **1169 translation units, every time,
+regardless of what changed**. `COPY . /src` never cache-hits on this host, so
+there is no incremental build to fall back on. That is why the time is ~9.5
+minutes whether you changed one file or a hundred.
+
+**ccache does not fix this — it was measured and rejected on 2026-08-16.** Adding
+`ccache` on a BuildKit cache mount (`CMAKE_CXX_COMPILER_LAUNCHER=ccache`) produced:
+
+| Build | Wall time | TUs compiled | ccache hits |
+|---|---|---|---|
+| cold | 9m07s | 1169 | 0 / 177 |
+| no-op (no source change at all) | 9m24s | 1169 | 0 / 177 |
+| one-file change | 9m05s | 1169 | 0 / 177 |
+
+Zero hits in every case, including a build with no source change whatsoever, and
+**85% of compiler invocations reported as uncacheable** (1016 / 1193). The change
+was reverted. Do not re-attempt it without first fixing the underlying cause —
+the `COPY . /src` layer never cache-hitting — because until that is fixed no
+compiler-level cache can help.
+
 If the VM's own resource ceiling ever needs raising again — this is what
 actually controls build parallelism, not any per-container Docker setting —
 edit `C:\Users\mihov\.wslconfig`, then `wsl --shutdown` from PowerShell (not
@@ -141,6 +165,7 @@ Set `TW_IMAGE` back to `tortoise-cm:local` once you have rebuilt a good image.
 | `BUILD_PLAYERBOTS` | Defaults `OFF`. A build without it yields a bot-free server with no warning. Check: `docker run --rm tortoise-cm:local ls /opt/turtle/etc \| grep aiplayerbot`. |
 | **A rebuild that produces no binary** | `scripts/rebuild.sh` checks that `mangosd`/`realmd` exist before checking that they link — `ldd` on a missing file writes to stderr, so a naive `ldd \| grep 'not found'` reports a missing binary as healthy. Do not "simplify" the `test -x` check or the `2>&1` out of that loop. |
 | `CMAKE_INSTALL_PREFIX` | Compiled in. It must stay `/opt/turtle` or the server logs one line about `aiplayerbot.conf` and runs with no bots. |
+| **Running a build in the background** | `docker build` streams from a client the daemon watches: kill the client and BuildKit **cancels the build**. Backgrounded, detached and `nohup`'d invocations all die partway through — `nohup` does not help, because WSL tears down the session's processes when `wsl.exe` exits. Observed repeatedly here, and independently on another project on this host. **Run builds in the foreground and wait.** A build killed this way leaves no image and no error — just a truncated log that looks like it stopped for no reason. |
 | Ports 3724 / 8095 | Shared with the older V1 stack. They cannot run together. |
 | `Release: 1970-01-01` in the log | Expected. `.git` is excluded from the build context, so the revision falls back; the real commit is on the image's `org.opencontainers.image.revision` label. |
 
