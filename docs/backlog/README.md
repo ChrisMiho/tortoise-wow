@@ -9,6 +9,21 @@ zero-padded 3-digit sequence number — `backlog-scope` assigns the next one
 when it creates a file; `backlog-drain` picks the lowest-numbered `pending`
 file each tick.
 
+**Numbers are never reused, even after an artifact is deleted.** Completed
+artifacts get cleared out periodically, so the directory does not record the
+sequence. A recycled number silently repoints every old commit, PR and
+`depends-on:` reference at a different issue.
+
+<!-- BACKLOG-COUNTER -->
+**Highest artifact number used: `012`. Next new artifact: `013`.**
+<!-- /BACKLOG-COUNTER -->
+
+`backlog-scope` bumps that counter when it creates an artifact, and also
+cross-checks it against git history, taking whichever is higher. The counter is
+there so a human can see the sequence at a glance; history is what makes a
+collision impossible if the counter is ever stale — a counter alone drifts the
+moment someone forgets to bump it, or two branches both claim the same number.
+
 ```markdown
 ---
 status: pending        # pending | in-progress | implemented | done | contested | blocked | failed | out-of-scope

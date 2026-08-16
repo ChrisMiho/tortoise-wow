@@ -56,6 +56,57 @@ server down with it.
 BUILD_JOBS=4 ./scripts/rebuild.sh    # if the Docker VM OOMs mid-compile
 ```
 
+**Run this in the foreground and wait for it.** Do not background it, `nohup` it,
+or detach it — see "Things that will cost you an afternoon" below. A backgrounded
+build is cancelled partway through and leaves nothing behind.
+
+Every build recompiles the entire tree — **1169 translation units, every time,
+regardless of what changed**. That is why the time is ~9.5 minutes whether you
+changed one file or a hundred.
+
+The cause, verified directly on 2026-08-16: **`COPY . /src` does not cache-hit
+across separate builds.** Build the build stage twice with an unchanged context
+and the second run re-executes the copy (~42s) instead of printing `CACHED`, so
+every instruction after it — the compile — misses too. The `apt-get` layer
+*above* the COPY does cache (`CACHED`, usage count 2), which is what makes this
+easy to misread as "caching is fine".
+
+`docker buildx du --verbose` shows it plainly: the compile step accumulates a
+separate multi-GB cache record per build, every one at **`Usage count: 0`**.
+They are written and never read.
+
+A caveat that cost an hour here: a small throwaway `COPY . /ctx` probe run twice
+back-to-back *does* cache, which looks like a contradiction. It is not — it just
+means the miss does not reproduce within seconds on a trivial image. Test this
+against the real build stage, minutes apart, or you will measure the wrong thing.
+
+Because the miss is at the COPY, **no layer-level or compiler-level cache can
+help** — everything downstream of the COPY is invalidated before it is consulted.
+That is why ccache scored zero (below), and why the warm-builder approach is the
+one worth trying.
+
+**ccache does not fix this — it was measured and rejected on 2026-08-16.** Adding
+`ccache` on a BuildKit cache mount (`CMAKE_CXX_COMPILER_LAUNCHER=ccache`) produced:
+
+| Build | Wall time | TUs compiled | ccache hits |
+|---|---|---|---|
+| cold | 9m07s | 1169 | 0 / 177 |
+| no-op (no source change at all) | 9m24s | 1169 | 0 / 177 |
+| one-file change | 9m05s | 1169 | 0 / 177 |
+
+Zero hits in every case, including a build with no source change whatsoever, and
+**85% of compiler invocations reported as uncacheable** (1016 / 1193). The change
+was reverted. Do not re-attempt it before working out why the compile layer never
+survives between builds — until that is fixed, no compiler-level cache can help.
+
+A more promising route is keeping the **build stage itself** warm rather than
+caching individual compiler calls. The other project on this host does exactly
+that: `tortoise-v2:builder` is a saved builder-stage image carrying 1,188 `.o`
+files and 14 GB of objects under `/build`, so its compiled output survives
+between builds instead of being rebuilt from nothing. Untested here, but it
+attacks the actual problem — no reuse of compiled objects — instead of layering
+a second cache on top of it.
+
 If the VM's own resource ceiling ever needs raising again — this is what
 actually controls build parallelism, not any per-container Docker setting —
 edit `C:\Users\mihov\.wslconfig`, then `wsl --shutdown` from PowerShell (not
@@ -89,6 +140,32 @@ docker exec -i -e MYSQL_PWD="$P" tcm-db mysql -uroot -N -e \
 `realmflags=2` means offline; `port` disagreeing with `WorldServerPort` in
 `mangosd.conf` makes the client hang after login, before character select.
 
+## Prove the running server is this repo's code
+
+`scripts/verify-running-commit.sh` answers "is what's running built from HEAD?"
+against whatever is already up. `scripts/validate-stack.sh` is the stronger,
+scriptable form: give it an image tag and it brings that image up and refuses to
+report success unless three gates pass.
+
+```bash
+./scripts/validate-stack.sh --image tortoise-cm:local
+./scripts/validate-stack.sh --image tortoise-cm:local --keep-up   # leave it running
+```
+
+| Gate | What it proves |
+|---|---|
+| provenance | the image's stamped revision resolves in this repo **and** equals HEAD — catches both DRIFT and FOREIGN |
+| identity | `tcm-mangosd` is running the image ID that tag resolves to. Tags are mutable; `:local` lies the moment anything is rebuilt |
+| liveness | world port open, `realmlist` reads `port=8095 realmflags=0`, and at least one character is online |
+
+The last stdout line is always `VALIDATE-STACK: PASS` or
+`VALIDATE-STACK: FAIL <reason>`. Exit codes: `0` pass, `1` a gate failed, `2` the
+checks could not run (docker down, missing `.env`, unlabelled image).
+
+An image built without `--build-arg GIT_SHA` carries no provenance labels and can
+only ever return `UNKNOWN`. Both `scripts/rebuild.sh` and the `backlog-batch`
+workflow pass them; anything else you build by hand must too.
+
 ## Rollback
 
 Every build is tagged with its commit, so the previous server is still on disk:
@@ -115,6 +192,7 @@ Set `TW_IMAGE` back to `tortoise-cm:local` once you have rebuilt a good image.
 | `BUILD_PLAYERBOTS` | Defaults `OFF`. A build without it yields a bot-free server with no warning. Check: `docker run --rm tortoise-cm:local ls /opt/turtle/etc \| grep aiplayerbot`. |
 | **A rebuild that produces no binary** | `scripts/rebuild.sh` checks that `mangosd`/`realmd` exist before checking that they link — `ldd` on a missing file writes to stderr, so a naive `ldd \| grep 'not found'` reports a missing binary as healthy. Do not "simplify" the `test -x` check or the `2>&1` out of that loop. |
 | `CMAKE_INSTALL_PREFIX` | Compiled in. It must stay `/opt/turtle` or the server logs one line about `aiplayerbot.conf` and runs with no bots. |
+| **Running a build in the background** | `docker build` streams from a client the daemon watches: kill the client and BuildKit **cancels the build**. Backgrounded, detached and `nohup`'d invocations all die partway through — `nohup` does not help, because WSL tears down the session's processes when `wsl.exe` exits. Observed repeatedly here, and independently on another project on this host. **Run builds in the foreground and wait.** A build killed this way leaves no image and no error — just a truncated log that looks like it stopped for no reason. |
 | Ports 3724 / 8095 | Shared with the older V1 stack. They cannot run together. |
 | `Release: 1970-01-01` in the log | Expected. `.git` is excluded from the build context, so the revision falls back; the real commit is on the image's `org.opencontainers.image.revision` label. |
 

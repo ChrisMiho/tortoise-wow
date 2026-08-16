@@ -152,7 +152,11 @@ if (included.length === 0) {
 }
 
 phase('Build')
-const imageTag = `tortoise-wow:${buildId}`
+// tortoise-cm, matching docker-compose.yml's TW_IMAGE default and the rest of
+// this repo's images. It was `tortoise-wow:` -- a third namespace belonging to
+// nothing, which meant a batch build could never be compared against, rolled
+// back to, or recognised by scripts/verify-running-commit.sh.
+const imageTag = `tortoise-cm:${buildId}`
 const built = await agent(
   `On branch "${integrated.integrationBranch}" (in its own worktree), build the
    Docker image per docs/superpowers/plans/2026-08-11-docker-build-from-this-checkout.md:
@@ -160,8 +164,45 @@ const built = await agent(
    bakes in -DBUILD_PLAYERBOTS=ON -DCMAKE_INSTALL_PREFIX=/opt/turtle and a
    BUILD_JOBS default of 10 (the Docker VM is now 16 CPUs/24GB, see
    docs/DOCKER.md) -- do not pass --build-arg BUILD_JOBS unless the build
-   OOMs, in which case retry with --build-arg BUILD_JOBS=4. Tag the resulting
-   image ${imageTag}.
+   OOMs, in which case retry with --build-arg BUILD_JOBS=4.
+
+   Budget ~9.5 minutes and do not try to make it faster. There is NO incremental
+   build here: "COPY . /src" does not cache-hit across builds, so every build
+   recompiles all ~1169 translation units regardless of whether you changed one
+   file or a hundred. Everything downstream of that COPY is invalidated before
+   any cache is consulted, so no build-arg, cache mount or compiler cache can
+   help. ccache was implemented and measured on 2026-08-16 -- cold 9m07s, no-op
+   9m24s, one-file change 9m05s, zero cache hits in all three -- and reverted.
+   Do not re-add it, and do not report a build as "slow" or "hung" merely
+   because it recompiles everything; that is the normal, expected behaviour.
+
+   You MUST pass the three provenance build args, exactly as scripts/rebuild.sh
+   does. Without them the image carries no provenance labels, and
+   scripts/validate-stack.sh can only ever return UNKNOWN against it -- meaning
+   nobody can prove the server that gets validated was built from this repo:
+
+     GIT_SHA        = git -C <worktree> rev-parse --short HEAD
+     GIT_DIRTY      = git -C <worktree> status --porcelain --untracked-files=no | wc -l
+     DOCKERFILE_SHA = sha256sum <worktree>/Dockerfile | cut -c1-12
+
+   So the command is:
+
+     docker build -t ${imageTag} \\
+       --build-arg GIT_SHA=<sha> \\
+       --build-arg GIT_DIRTY=<count> \\
+       --build-arg DOCKERFILE_SHA=<dfsha> \\
+       <worktree>
+
+   An empty GIT_SHA stamps the image "unknown" -- check it is non-empty BEFORE
+   starting a ~10 minute compile, and fail immediately if it is empty.
+
+   Run the build in the FOREGROUND and wait for it (~10 minutes). Do NOT
+   background it, nohup it, or detach it. "docker build" streams from a client
+   the daemon watches, so killing the client cancels the build -- a backgrounded
+   build dies partway through and leaves no image and no error, just a truncated
+   log. nohup does not help: WSL tears down the session's processes when the
+   wsl.exe that started them exits. This has bitten more than one agent on this
+   host; see docs/DOCKER.md, "Things that will cost you an afternoon".
 
    Run "docker build" itself from Windows PowerShell directly against that
    worktree's path -- the build context is just the repo directory and needs
@@ -199,19 +240,33 @@ const validated = await agent(
    dockerReady: false and liveness: a one-sentence explanation, and do NOT
    attempt docker compose at all -- skip straight to reporting that back.
 
-   If Docker is ready: bring the stack up with the ${imageTag} image by
-   running "TW_IMAGE=${imageTag} docker compose up -d" -- docker-compose.yml
-   resolves the server image via the TW_IMAGE env var (default
-   tortoise-cm:local), so a bare "docker compose up" silently reuses whatever
-   was built previously instead of this batch's image. (Compose project name
-   is pinned to tortoise-cm; tortoise-wow-v2_dbdata is an external
-   volume -- never use "docker compose down -v", that volume is the entire
-   world.) This is a single-developer, no-live-players development server --
-   you are not simulating a player, just confirming the server comes up
-   correctly.
+   If Docker is ready: do NOT hand-roll the compose invocation. Run the repo's
+   gate script, which brings the stack up and refuses to report success unless
+   provenance, image identity, and real liveness all pass:
 
-   Confirm the baseline liveness smoke test: the server starts, aiplayerbot.conf
-   loads, bots spawn. Report that in liveness.
+     TW_SRC_DIR=<worktree> <main-checkout>/scripts/validate-stack.sh \\
+       --image ${imageTag} --env-file <main-checkout>/.env --keep-up
+
+   where <main-checkout> is the repository root of the ORIGINAL session
+   directory, not this worktree -- .env is gitignored and exists only there.
+   Resolve it with "git -C <worktree> worktree list": the FIRST entry is the
+   main checkout. The script must be run from WSL, not Git Bash.
+
+   TW_SRC_DIR is NOT optional here. The gate compares the image's stamped
+   revision against HEAD of the repo it reads git from, which defaults to the
+   checkout the script lives in -- the main checkout. This image was built from
+   the worktree at "${integrated.integrationBranch}", whose HEAD is a different
+   commit, so without this override gate 1 reports DRIFT on every batch run and
+   nothing downstream is ever validated. Point it at the worktree and it
+   compares against the commit the image was actually built from. Compose still
+   runs from the main checkout, which is where docker-compose.yml and .env live,
+   so only the git comparison moves.
+
+   Its last stdout line is "VALIDATE-STACK: PASS" or
+   "VALIDATE-STACK: FAIL <reason>". Report that line verbatim in liveness.
+   If it is FAIL, set dockerReady false and do not attempt any per-artifact
+   check -- an unverified server cannot confirm anything, and a check that
+   "passed" against a foreign or drifted image is worse than no check at all.
 
    Then, for each artifact below, attempt only what its inGameCheck says is
    confirmable from logs or console output (not everything is -- most checks
@@ -224,10 +279,13 @@ const validated = await agent(
    attempted, and what you observed or why it wasn't scriptable. Do not claim
    you confirmed something you only assumed.
 
-   Whether or not the build/validation was clean, finish by bringing the
-   stack back down (plain "docker compose down", never with -v) before you
-   return -- this must happen even if something above failed or looked
-   wrong, so the stack is never left running unattended.`,
+   Whether or not the build/validation was clean, finish by bringing the stack
+   back down before you return, so it is never left running unattended:
+
+     docker compose --env-file <main-checkout>/.env down
+
+   Plain "down". NEVER "down -v" -- tortoise-wow-v2_dbdata is the entire world.
+   This must happen even if something above failed or looked wrong.`,
   { phase: 'Validate', label: 'validate', schema: VALIDATE_SCHEMA }
 )
 
