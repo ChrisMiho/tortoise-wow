@@ -89,12 +89,31 @@ entire night's matches instead of one match.
   <hordeTeam> --run-dir <dir>`, last line
   `MATCH alliance=… horde=… winner=<ALLIANCE|HORDE|NONE> instance=… duration=…`.
   Write against that; do not try to execute a real match here.
-- **Verification needing a live stack (not part of these criteria):** a full
-  `wsg-open` run — two round-1 matches then a final — ending in
-  `TOURNAMENT-RUN bracket=wsg-open champion=<team-id> rounds=<n>`. Budget ~25
-  minutes per match, so up to ~75 minutes. Record how many matches were decided
-  by tiebreak and at which rung — if most of the bracket is settled on
-  `tiebreak_seed`, the bots are not scoring at all and that is a finding for
-  `docs/playerbots/BG-AI-ANALYSIS.md`, not a tournament that worked.
+- **Live validation checklist.** There is no unit test for this script by
+  decision — it is validated by running a real bracket. Budget ~25 minutes per
+  match, up to ~75 for `wsg-open`. The thing being proved is that **a second
+  match starts, with the next pairing's rosters, after the first one finishes** —
+  everything else the driver does is bookkeeping around that. Run in order:
+  1. `./scripts/tournament/tournament-run.sh wsg-open --run-dir
+     logs/tournament/first`
+  2. After the first `MATCH` line, confirm the **roster swap actually happened**
+     — the first pairing offline and the second pairing online:
+     `SELECT name, online FROM tw_char.characters WHERE name LIKE 'Wsg%' AND
+     online = 1 ORDER BY name;`
+     This is the single most important observation in the run. A second match
+     that starts with the *first* pairing still logged in means `match-run.sh`'s
+     logout step silently failed, and the bracket is playing the wrong teams.
+  3. A second `MATCH` line appears, naming the second pairing.
+  4. `state.json` holds two results with the right teams, winners, and
+     `decidedBy` values — `jq '.results' <run-dir>/state.json`.
+  5. **Prove resume against the real run**: interrupt it mid-bracket, then
+     re-invoke with the same `--run-dir`. It must log
+     `skipping <a> vs <h> — already recorded` for every completed pairing and
+     pick up at the first unplayed one, not replay from the top.
+  6. Ends with `TOURNAMENT-RUN bracket=wsg-open champion=<team-id> rounds=<n>`.
+- Record how many matches were decided by tiebreak and at which rung. If most of
+  the bracket settles on `tiebreak_seed`, the bots are not scoring at all — that
+  is a finding for `docs/playerbots/BG-AI-ANALYSIS.md`, not a tournament that
+  worked. Given 15 of 37 recorded matches were draws, expect at least one.
 - `tournament-run.sh` does **not** manage the alive-world bot pool. That
   interaction is artifact 043.

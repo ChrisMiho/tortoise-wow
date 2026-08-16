@@ -96,7 +96,31 @@ logged out before the next is logged in.
 - Never party a bot to a GM — `HasActivePlayerMaster()` is a hard gate in the
   bot's queue logic (`BattleGroundJoinAction.cpp:568`) and a partied bot never
   queues again.
-- **Verification needing a live stack (not part of these criteria):** one real
-  match against a validated stack, producing a `MATCH ... winner=... instance=...
-  duration=...` line within ~25 minutes and a `<run-dir>/match.log` holding the
-  whole sequence.
+- **Live validation checklist.** There is no unit test for this script by
+  decision — it is validated by running one real match and reading the database
+  and logs. It needs an image containing the `.tournament` commands, so this
+  happens **after** a batch build, not during implementation. Run in order:
+  1. `./scripts/validate-stack.sh --image <the batch image> --keep-up` must
+     report `VALIDATE-STACK: PASS` before anything else is trusted.
+  2. `./scripts/tournament/match-run.sh stormwind-sentinels orgrimmar-warsong
+     --run-dir logs/tournament/smoke`
+  3. **While it runs**, confirm the population gate held — exactly the 20 playing
+     bots online and nothing else:
+     `SELECT name FROM tw_char.characters WHERE online = 1 ORDER BY name;`
+     Anything outside the two rosters, other than one GM spectator, means the
+     random pool is not actually off.
+  4. Confirm the battleground really holds them, which is the world-port
+     acknowledgement question in practice: `tournament members <inst>` must read
+     `count=20`. **`add ... sent=1` with `members ... count=0` is the documented
+     failure** — if that happens, stop and switch `ASSEMBLE_MODE=queue` rather
+     than editing the script.
+  5. `grep -a "\[489," ~/tortoise-wow-server-V2/logs/bg.log | tail` should show
+     the instance.
+  6. A `MATCH alliance=... horde=... winner=... instance=... duration=...
+     allianceScore=... hordeScore=...` line within ~25 minutes, and
+     `<run-dir>/match.log` holding the whole sequence.
+  7. Afterwards both teams must read `online=0`, so the next match starts from a
+     clean roster.
+- **`winner=NONE` is a pass, not a failure** — 15 of the 37 matches recorded in
+  `bg.log` ended that way. The failure condition is no `MATCH` line at all, or
+  the script hanging.

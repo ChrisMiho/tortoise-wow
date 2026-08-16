@@ -1,5 +1,5 @@
 ---
-status: pending
+status: in-progress
 risk: low
 area: tournament/teams
 depends-on:

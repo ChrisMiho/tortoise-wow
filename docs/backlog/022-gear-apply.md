@@ -66,13 +66,43 @@ item choice rather than a broken command.
   Syntax-check only.
 - There is no unit test for this script in the plan and none is required; its
   behaviour is only observable against a running server.
-- **Verification needing a live stack (not part of these criteria):** with a team
-  logged in, `gear-audit.sh <team>` (the "before"), then `gear-apply.sh team
-  <team>`, expecting a final `GEAR-AUDIT <team> complete=10/10 worstMissing=0`
-  and exit 0. Then `gear-apply.sh player <team> one --tier upgrade` must change
-  that bot's head-slot `itemEntry` in `character_inventory` — that is the exact
-  mechanism the viewer "upgrade armor" effect calls. Any residual missing slot
-  shows up as `reason=cannot_equip(<n>)`; look the code up in `InventoryResult`
-  (`SharedDefines.h`) and fix the tier file, not the script.
+- **Live validation checklist.** There is no unit test for this script by
+  decision — it is validated by running it and reading the database. Run in
+  order, recording each result:
+  1. `./scripts/tournament/roster.sh login stormwind-sentinels`
+  2. `./scripts/tournament/gear-audit.sh stormwind-sentinels` — the "before".
+     Expected from the 2026-08-16 baseline: `complete=4/10`.
+  3. `./scripts/tournament/gear-apply.sh team stormwind-sentinels`
+  4. Expect a final `GEAR-AUDIT stormwind-sentinels complete=10/10
+     worstMissing=0` and exit 0.
+  5. **Confirm in the database, not from the script's own output** — filled
+     required slots per bot must be 13:
+     ```sql
+     SELECT c.name, COUNT(ci.slot) FROM tw_char.characters c
+       LEFT JOIN tw_char.character_inventory ci ON ci.guid = c.guid AND ci.bag = 0
+        AND ci.slot IN (0,1,2,4,5,6,7,8,9,10,12,14,15)
+      WHERE c.name LIKE 'Wsga%' GROUP BY c.name ORDER BY c.name;
+     ```
+  6. **Confirm it is actually the white tier**, which is the whole point of the
+     uniform kit — every equipped item should be `quality = 1`:
+     ```sql
+     SELECT it.quality, COUNT(*) FROM tw_char.character_inventory ci
+       JOIN tw_char.item_instance ii ON ii.guid = ci.item
+       JOIN tw_char.characters c ON c.guid = ci.guid
+       JOIN tw_world.item_template it ON it.entry = ii.itemEntry
+      WHERE c.name LIKE 'Wsga%' AND ci.bag = 0 AND ci.slot <= 18
+      GROUP BY it.quality;
+     ```
+     Anything other than `quality = 1` means the generator picked outside its
+     tier, or an item failed to equip and the old one survived.
+  7. `./scripts/tournament/gear-apply.sh player stormwind-sentinels one --tier
+     upgrade` must change that bot's head-slot `itemEntry` — this is the exact
+     mechanism the viewer `upgrade_armor_*` effect calls, so it failing here
+     means those effects are broken too.
+- Any residual missing slot shows up as `reason=cannot_equip(<n>)`. Look the code
+  up in `InventoryResult` (`SharedDefines.h`): a class or level restriction is a
+  bad item choice in the tier file, not a broken script. **The most likely cause
+  is armor proficiency** — 1,818 of 1,940 white items are `allowable_class = -1`,
+  so a generator filtering on that bitmask alone will have put plate on a mage.
 - Never write to `character_inventory` or `item_instance` directly while a
   character is online — the next player save overwrites it.
