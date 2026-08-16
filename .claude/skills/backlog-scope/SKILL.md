@@ -40,13 +40,36 @@ no other checkpoint, this conversation is the only chance to get the scope right
      under **Notes** so `backlog-issue` can recognize an infeasible
      acceptance criterion instead of treating it as an ordinary
      implementation failure.
-3. **Determine the next artifact number.** List `docs/backlog/*.md`, take the
-   highest `NNN-` prefix present, and use the next integer zero-padded to 3
-   digits (e.g. `003`). If the directory has no numbered artifacts yet, start
-   at `001`.
+3. **Determine the next artifact number.** Numbers are **never reused**, so
+   derive the high-water mark from git history rather than from the files
+   currently on disk — artifacts get deleted once their work lands, and an
+   emptied directory must not restart the sequence at `001`. A recycled number
+   silently repoints every old commit, PR and `depends-on:` reference at a
+   different issue.
+
+   ```bash
+   git log --all --name-only --format= -- 'docs/backlog/[0-9]*.md' \
+     | sort -u | grep -oE '[0-9]{3}-' | tr -d '-' | sort -n | tail -1
+   ```
+
+   Take the highest of **three** sources and add one, zero-padded to 3 digits:
+
+   - the git-history high-water mark from the command above,
+   - the counter in the `<!-- BACKLOG-COUNTER -->` block of
+     `docs/backlog/README.md`,
+   - any numbered files currently in `docs/backlog/`.
+
+   They should agree. When they do not, the highest wins — that is the whole
+   point of checking more than one. Only start at `001` if all three are empty,
+   meaning no artifact has ever existed in this repository.
 4. **Slugify the title** (lowercase, hyphens, no punctuation) for the filename.
 5. **Write the artifact** to `docs/backlog/<NNN>-<slug>.md`, following the
    format in `docs/backlog/README.md` exactly, with `status: pending`.
    Include `depends-on:` in the frontmatter if step 2 identified one; omit the line's value (leave it blank) otherwise.
+5b. **Bump the counter.** Update the `<!-- BACKLOG-COUNTER -->` block in
+   `docs/backlog/README.md` to the number just used and the next one, in the
+   same commit as the new artifact. Skipping this is not fatal — step 3 still
+   derives the right number from git history — but it leaves the counter stale
+   and misleading to anyone reading it.
 6. **Confirm** the file path back to the user and ask if they have another idea
    to scope, looping back to step 1 if so.
