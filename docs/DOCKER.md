@@ -64,12 +64,26 @@ Every build recompiles the entire tree — **1169 translation units, every time,
 regardless of what changed**. That is why the time is ~9.5 minutes whether you
 changed one file or a hundred.
 
-The cause is **not** that layer caching is broken: a small `COPY . /ctx` probe
-against this same context cached cleanly on a second identical build. What is
-not established is why the real compile layer never survives. The leading
-suspect is BuildKit evicting it under space pressure — this host carries ~58 GB
-of images and ~34 GB of build cache — but that has not been proven, so treat it
-as the next thing to test rather than a known fact.
+The cause, verified directly on 2026-08-16: **`COPY . /src` does not cache-hit
+across separate builds.** Build the build stage twice with an unchanged context
+and the second run re-executes the copy (~42s) instead of printing `CACHED`, so
+every instruction after it — the compile — misses too. The `apt-get` layer
+*above* the COPY does cache (`CACHED`, usage count 2), which is what makes this
+easy to misread as "caching is fine".
+
+`docker buildx du --verbose` shows it plainly: the compile step accumulates a
+separate multi-GB cache record per build, every one at **`Usage count: 0`**.
+They are written and never read.
+
+A caveat that cost an hour here: a small throwaway `COPY . /ctx` probe run twice
+back-to-back *does* cache, which looks like a contradiction. It is not — it just
+means the miss does not reproduce within seconds on a trivial image. Test this
+against the real build stage, minutes apart, or you will measure the wrong thing.
+
+Because the miss is at the COPY, **no layer-level or compiler-level cache can
+help** — everything downstream of the COPY is invalidated before it is consulted.
+That is why ccache scored zero (below), and why the warm-builder approach is the
+one worth trying.
 
 **ccache does not fix this — it was measured and rejected on 2026-08-16.** Adding
 `ccache` on a BuildKit cache mount (`CMAKE_CXX_COMPILER_LAUNCHER=ccache`) produced:
