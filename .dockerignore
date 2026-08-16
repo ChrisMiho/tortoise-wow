@@ -33,6 +33,9 @@ fork-migration/
 scripts/
 docker-compose.yml
 .env.example
+config/
+tests/
+logs/
 
 # Secrets. Must never enter a layer.
 .env*
