@@ -23,6 +23,7 @@ Nine plans, each producing working, testable software on its own. They live in
 | 06 | [Viewer interaction effects](../superpowers/plans/2026-08-16-06-viewer-effects.md) | 02, 03, 04 | C++ + shell |
 | 07 | [Battleground bot combat analysis](../superpowers/plans/2026-08-16-07-bg-combat-analysis.md) | 05 | investigation |
 | 08 | [Spectator camera & streaming feasibility](../superpowers/plans/2026-08-16-08-spectator-camera.md) | 02, 05 | C++ + shell + assessment |
+| 09 | [Release tag & 1000-bot stand-up](../superpowers/plans/2026-08-16-09-release-tag-and-1000-bot-standup.md) | all of 00-08 | closing step |
 
 Plan 00 is not optional. Until it lands, batch-built images carry no provenance
 labels and `verify-running-commit.sh` can only return `UNKNOWN` — meaning nothing
@@ -31,6 +32,21 @@ downstream can prove the server it validated against was built from this reposit
 Plan 07 changes no bot AI. It produces an analysis document and one backlog artifact
 per actionable finding, so each behavioural change gets reviewed against a
 measurement instead of arriving inside an investigation.
+
+Plan 09 is the closing step: raise the compiled bot-count fallbacks to 1000, stand
+the full stack up and prove it settles there, then cut `tournament-v1` as an
+annotated git tag and a matching image tag. It is gated on a **human** playability
+check — the one thing the 2026-08-15 memory run explicitly could not verify.
+
+## One piece of evidence is on an unpushed branch
+
+`memory/baseline-measurement` is shelved **and local-only** — `origin` has
+`memory/baseline-investigation`, which does not contain the `BOT-MEMORY-*` documents,
+the raw ramp data, or `rss-trace.sh` / `rss-plateau.sh` / `bot-ramp.sh`. Plan 09
+reasons from those measurements and needs those instruments. Its Task 1 pushes the
+branch (pushing is not merging) and recovers the three scripts. Worth doing early
+rather than at the end — right now a stray `git branch -D` costs a full night of
+measurement.
 
 ## The one measurement everything waits on
 
