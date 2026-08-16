@@ -152,7 +152,11 @@ if (included.length === 0) {
 }
 
 phase('Build')
-const imageTag = `tortoise-wow:${buildId}`
+// tortoise-cm, matching docker-compose.yml's TW_IMAGE default and the rest of
+// this repo's images. It was `tortoise-wow:` -- a third namespace belonging to
+// nothing, which meant a batch build could never be compared against, rolled
+// back to, or recognised by scripts/verify-running-commit.sh.
+const imageTag = `tortoise-cm:${buildId}`
 const built = await agent(
   `On branch "${integrated.integrationBranch}" (in its own worktree), build the
    Docker image per docs/superpowers/plans/2026-08-11-docker-build-from-this-checkout.md:
@@ -199,16 +203,31 @@ const validated = await agent(
    dockerReady: false and liveness: a one-sentence explanation, and do NOT
    attempt docker compose at all -- skip straight to reporting that back.
 
-   If Docker is ready: bring the stack up with the ${imageTag} image by
-   running "TW_IMAGE=${imageTag} docker compose up -d" -- docker-compose.yml
-   resolves the server image via the TW_IMAGE env var (default
-   tortoise-cm:local), so a bare "docker compose up" silently reuses whatever
-   was built previously instead of this batch's image. (Compose project name
-   is pinned to tortoise-cm; tortoise-wow-v2_dbdata is an external
-   volume -- never use "docker compose down -v", that volume is the entire
-   world.) This is a single-developer, no-live-players development server --
-   you are not simulating a player, just confirming the server comes up
-   correctly.
+   If Docker is ready: bring the stack up with the ${imageTag} image.
+
+   CRITICAL -- you are in a git worktree, and .env IS NOT THERE. It is
+   gitignored, so it exists only in the main checkout and no worktree ever
+   receives a copy. docker-compose.yml opens with
+   "\${DB_PASS:?set DB_PASS in .env}" and resolves TW_ETC / TW_DATA / TW_LOGS
+   the same way, so a bare "docker compose up -d" from this worktree dies
+   immediately on the missing variable and never starts anything. Point it at
+   the main checkout's .env explicitly:
+
+     TW_IMAGE=${imageTag} docker compose --env-file <main-checkout>/.env up -d
+
+   where <main-checkout> is the repository root of the ORIGINAL session
+   directory, not this worktree. Resolve it with
+   "git -C <worktree> worktree list" -- the FIRST entry is the main checkout.
+   Verify the file exists before running compose; if it does not, return
+   dockerReady: false with that as the reason rather than guessing at values.
+
+   TW_IMAGE must be set explicitly: docker-compose.yml defaults it to
+   tortoise-cm:local, so omitting it silently reuses whatever was built
+   previously instead of this batch's image. (Compose project name is pinned
+   to tortoise-cm; tortoise-wow-v2_dbdata is an external volume -- never use
+   "docker compose down -v", that volume is the entire world.) This is a
+   single-developer, no-live-players development server -- you are not
+   simulating a player, just confirming the server comes up correctly.
 
    Confirm the baseline liveness smoke test: the server starts, aiplayerbot.conf
    loads, bots spawn. Report that in liveness.
@@ -225,7 +244,8 @@ const validated = await agent(
    you confirmed something you only assumed.
 
    Whether or not the build/validation was clean, finish by bringing the
-   stack back down (plain "docker compose down", never with -v) before you
+   stack back down (plain "docker compose down" with the SAME --env-file, never
+   with -v) before you
    return -- this must happen even if something above failed or looked
    wrong, so the stack is never left running unattended.`,
   { phase: 'Validate', label: 'validate', schema: VALIDATE_SCHEMA }
