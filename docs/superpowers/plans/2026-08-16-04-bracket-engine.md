@@ -97,7 +97,7 @@ ROOT="$HERE/../.."
 . "$HERE/../lib/assert.sh"
 . "$ROOT/scripts/tournament/lib/bracket.sh"
 
-command -v jq >/dev/null 2>&1 || { echo "SKIP: jq not installed"; exit 0; }
+require_cmd jq
 export BRACKET_DIR="$ROOT/config/tournament/brackets"
 
 assert_exit 0 "the shipped bracket validates" -- bracket_validate wsg-open
@@ -309,7 +309,7 @@ ROOT="$HERE/../.."
 . "$HERE/../lib/assert.sh"
 . "$ROOT/scripts/tournament/lib/state.sh"
 
-command -v jq >/dev/null 2>&1 || { echo "SKIP: jq not installed"; exit 0; }
+require_cmd jq
 
 run="$(mktemp -d)/run1"
 state_init "$run" wsg-open "swa swb" "hoa hob"

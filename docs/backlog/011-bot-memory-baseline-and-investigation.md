@@ -1,5 +1,5 @@
 ---
-status: pending
+status: blocked
 risk: medium
 area: playerbots/memory
 depends-on:

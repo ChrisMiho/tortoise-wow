@@ -82,7 +82,7 @@ ROOT="$HERE/../.."
 . "$HERE/../lib/assert.sh"
 . "$ROOT/scripts/tournament/lib/team.sh"
 
-command -v jq >/dev/null 2>&1 || { echo "SKIP: jq not installed"; exit 0; }
+require_cmd jq
 
 export TEAM_DIR="$ROOT/config/tournament/teams"
 
@@ -403,7 +403,7 @@ ROOT="$HERE/../.."
 . "$HERE/../lib/assert.sh"
 . "$HERE/../lib/stub.sh"
 
-command -v jq >/dev/null 2>&1 || { echo "SKIP: jq not installed"; exit 0; }
+require_cmd jq
 
 d="$(stub_dir)"
 # Stand in for `docker exec ... mysql -e "<sql>"`. Returns 8 of the 10 bots

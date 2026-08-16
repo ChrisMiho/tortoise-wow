@@ -269,7 +269,7 @@ ROOT="$HERE/../.."
 . "$HERE/../lib/assert.sh"
 . "$ROOT/scripts/tournament/lib/gear.sh"
 
-command -v jq >/dev/null 2>&1 || { echo "SKIP: jq not installed"; exit 0; }
+require_cmd jq
 export GEAR_DIR="$ROOT/config/tournament/gear"
 
 A="$(gear_items_armor warrior tank base)"

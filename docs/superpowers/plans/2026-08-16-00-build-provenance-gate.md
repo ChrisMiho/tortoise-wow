@@ -71,9 +71,23 @@ Node (the workflow script is plain JS).
   - `assert_contains <haystack> <needle> <label>`
   - `assert_exit <expected-code> <label> -- <command...>`
   - `assert_summary` — prints the tally, exits 0 if all passed, 1 otherwise
+  - `require_cmd <name>...` — hard-fails the test file if a tool is missing
   - `stub_dir` — creates a temp dir, echoes its path, prepends it to `PATH`
   - `stub_cmd <dir> <name> <body>` — writes an executable stub
   - `stub_cleanup <dir>`
+
+- [ ] **Step 0: Install `jq` — it is missing, and every later plan needs it**
+
+Verified 2026-08-16: `jq` is **not installed in WSL Ubuntu**. Plans 01, 03, 04 and
+06 read all their JSON through it, so without this they cannot run at all.
+
+```bash
+command -v jq >/dev/null 2>&1 || sudo apt-get update && sudo apt-get install -y jq
+jq --version
+```
+
+Expected: a version string. This is a host prerequisite, not a repo change — there
+is nothing to commit for it, but it must happen before Plan 01.
 
 - [ ] **Step 1: Write the failing self-test**
 
@@ -150,6 +164,23 @@ assert_exit() { # <expected-code> <label> -- <command...>
 assert_summary() {
   printf '\n%d passed, %d failed\n' "$ASSERT_PASSED" "$ASSERT_FAILED"
   [ "$ASSERT_FAILED" -eq 0 ]
+}
+
+# Hard-fail on a missing tool. Deliberately NOT a skip: a test file that skips
+# itself prints no failures, exits 0, and is indistinguishable from one that ran
+# and passed -- so an automated run reports green on work it never did. If a
+# dependency is genuinely optional, assert on the behaviour with and without it;
+# do not make the whole file vanish.
+require_cmd() { # <name>...
+  local missing=""
+  for c in "$@"; do
+    command -v "$c" >/dev/null 2>&1 || missing="$missing $c"
+  done
+  if [ -n "$missing" ]; then
+    printf 'FATAL: missing required tool(s):%s\n' "$missing" >&2
+    printf '       install and re-run; this test did NOT pass, it could not start.\n' >&2
+    exit 1
+  fi
 }
 ```
 

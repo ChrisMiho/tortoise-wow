@@ -100,7 +100,7 @@ ROOT="$HERE/../.."
 . "$HERE/../lib/assert.sh"
 . "$HERE/../lib/stub.sh"
 
-command -v jq >/dev/null 2>&1 || { echo "SKIP: jq not installed"; exit 0; }
+require_cmd jq
 
 d="$(stub_dir)"
 # Every bot has head(0) and chest(4) only -- so 2 filled, the rest missing.

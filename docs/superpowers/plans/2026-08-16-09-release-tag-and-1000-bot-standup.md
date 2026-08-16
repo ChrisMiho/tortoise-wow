@@ -399,10 +399,31 @@ log "world is up"
 # --- 3. trace while it ramps ----------------------------------------------
 # Written continuously to disk: this host reboots itself overnight for Windows
 # Update, and a trace held in memory until the end would be lost entirely.
-"$HERE/rss-trace.sh" --interval 30 --out "$OUT/rss-trace.tsv" >/dev/null 2>&1 &
+#
+# rss-trace.sh takes NO command-line flags -- it is configured entirely by
+# TW_RSS_TRACE / TW_RSS_INTERVAL / TW_STACK_ROOT. Passing --out to it does not
+# error; it is ignored, and the trace silently lands at the script's default
+# /home/deck/rss-watch.tsv instead of where this script expects it.
+export TW_RSS_TRACE="$OUT/rss-trace.tsv"
+export TW_RSS_INTERVAL=30
+export TW_STACK_ROOT="${TW_LIVE_ROOT:-$HOME/tortoise-wow-server-V2}"
+
+"$HERE/rss-trace.sh" >/dev/null 2>&1 &
 TRACE_PID=$!
 trap 'kill "$TRACE_PID" 2>/dev/null || true' EXIT
-log "rss-trace running (pid $TRACE_PID) -> $OUT/rss-trace.tsv"
+sleep 5
+if ! kill -0 "$TRACE_PID" 2>/dev/null || [ ! -s "$TW_RSS_TRACE" ]; then
+    # rss-trace.sh's own header records this: a process backgrounded inside
+    # `wsl.exe -e bash -lc '...'` is torn down when that invocation returns, and
+    # nohup/setsid do NOT save it (observed 2026-08-15). Every gate below reads
+    # the trace, so a dead sampler must fail here rather than 90 minutes later.
+    log "FAIL: rss-trace did not start or is writing nothing to $TW_RSS_TRACE"
+    log "      Run this script from an interactive WSL shell, not a wrapped"
+    log "      'wsl -e bash -lc' one-liner -- backgrounded processes do not survive that."
+    echo "STANDUP target=$TARGET verdict=FAIL reason=trace_not_running" | tee -a "$OUT/standup.log"
+    exit 1
+fi
+log "rss-trace running (pid $TRACE_PID) -> $TW_RSS_TRACE"
 
 # --- 4. wait for the count, then for the PLATEAU ---------------------------
 # These are two different things. bot-ramp.sh's `wait` returns REACHED the moment
@@ -424,10 +445,14 @@ while :; do
 done
 log "count reached; now holding for an RSS plateau"
 
+# rss-plateau.sh's $1 is a WINDOW SIZE IN SAMPLES, not a path -- it reads the
+# trace from TW_RSS_TRACE (exported above) and rejects a non-integer argument
+# outright. 20 samples at 30s is the 10-minute window the 2026-08-15 ramp used,
+# with the same 0.25% drift criterion.
 plateau=0
 deadline=$(( $(date +%s) + 3600 ))
 while :; do
-    if "$HERE/rss-plateau.sh" "$OUT/rss-trace.tsv" 2>&1 | tee -a "$OUT/standup.log" | grep -q "PLATEAU"; then
+    if "$HERE/rss-plateau.sh" 20 2>&1 | tee -a "$OUT/standup.log" | grep -q "PLATEAU"; then
         plateau=1; break
     fi
     [ "$(date +%s)" -lt "$deadline" ] || { log "WARN: no plateau within 60 min of reaching the count"; break; }
@@ -435,7 +460,13 @@ while :; do
 done
 
 # --- 5. gates --------------------------------------------------------------
-RSS_B="$(awk 'END { print $2 }' "$OUT/rss-trace.tsv" 2>/dev/null)"
+# Column index confirmed against the trace's own header before use -- rss-trace.sh
+# writes a header row, and hardcoding a position here would silently read the
+# wrong field if that schema ever gains a column.
+RSS_COL="$(head -1 "$TW_RSS_TRACE" | tr '\t' '\n' | grep -n '^rss_kb$' | cut -d: -f1)"
+[ -n "$RSS_COL" ] || { log "FAIL: no rss_kb column in $TW_RSS_TRACE"; exit 1; }
+RSS_KB="$(awk -v c="$RSS_COL" -F'\t' 'NR>1 && $c != "" { v = $c } END { print v }' "$TW_RSS_TRACE")"
+RSS_B=$(( ${RSS_KB:-0} * 1024 ))
 RSS_GIB="$(gib "${RSS_B:-0}")"
 online="$(prov_online_count)"
 
