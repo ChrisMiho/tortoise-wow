@@ -54,9 +54,25 @@ spectator around an empty map for the next hour.
 - **This produces broadcast-style cuts, not smooth tracking.** Say so in the
   script header and point at `docs/playerbots/TOURNAMENT-STREAMING.md`; there is
   no server-side API to rotate a client's view.
+- **The one-time in-game setup includes the camera, and the plan omits that.**
+  `tournament camera` teleports to the point of interest plus a height offset
+  (default 25 yards) while **preserving the player's orientation** — and camera
+  *pitch* cannot be set server-side at all. So before a match the operator must
+  also **pitch the view downward and zoom out**, not just run `.gm on`,
+  `.gm visible off`, `.hover 1`, `.god on`. Without that the director works
+  perfectly and every shot is of the horizon. Record this in the script header
+  and in `docs/playerbots/TOURNAMENT-STREAMING.md`; it is the difference between
+  automation that works and automation that appears to.
+- **If overhead framing proves awkward, the alternative is worth trying before
+  reaching for a client addon:** place the spectator at a horizontal offset from
+  the point of interest at a modest height, and pass a computed orientation
+  (yaw toward the POI) to `TeleportTo` rather than the player's current one. Yaw
+  *is* settable server-side, so that framing needs no manual pitch at all and
+  survives the operator bumping the mouse. It is a change to artifact 038's
+  handler, not to this director.
 - **Verification needing a live stack and a human (not part of these criteria):**
-  log in as the GM (`rank=4`), set `.gm on`, `.gm visible off`, `.hover 1`,
-  `.god on`, then run the director against a live match. Record what it actually
-  looks like on screen — specifically whether the teleport cadence is watchable or
-  jarring at `--interval 15`. That observation is an input to artifact 040 and
-  cannot be obtained any other way.
+  run the director against a live match with the setup above. Record what it
+  actually looks like on screen — specifically whether the teleport cadence is
+  watchable or jarring at `--interval 15`, and whether the framing lands on the
+  action or beside it. That observation is an input to artifact 040 and cannot be
+  obtained any other way.
