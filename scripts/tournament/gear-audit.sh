@@ -36,6 +36,13 @@ DB_CONTAINER="${DB_CONTAINER:-tcm-db}"
 # The slots a bot must have filled to count as dressed, with the names printed
 # in missing=. Ids are EQUIPMENT_SLOT_* from src/game/Objects/Player.h:590-610.
 #
+# COUPLED to GEAR_REQUIRED_NAMES in scripts/tournament/lib/gear.sh, and to the
+# slot column of ITEMDB_SLOT_MAP in scripts/tournament/lib/itemdb.sh -- the same
+# 13 slots, in the same order. If one list changes, change all three. A tier that
+# validates in gear.sh but audits as incomplete here is worse than either failure
+# alone: it looks like a working kit right up to the moment a match is gated on
+# this script, and then blames the gear instead of the disagreement.
+#
 # The six absentees are absent on purpose, and none of them may ever be reported
 # as missing: body(3) and tabard(18) are cosmetic, finger2(11) and trinket2(13)
 # are optional duplicates of slots already required, offhand(16) is legitimately
