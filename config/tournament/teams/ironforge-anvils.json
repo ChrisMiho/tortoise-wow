@@ -1,0 +1,19 @@
+{
+  "id": "ironforge-anvils",
+  "displayName": "Ironforge Anvils",
+  "faction": "A",
+  "namePrefix": "Wsgb",
+  "gearTier": "base",
+  "roster": [
+    { "slot": "one",   "class": "warrior", "race": "Dwarf",    "role": "tank"   },
+    { "slot": "two",   "class": "paladin", "race": "Human",    "role": "tank"   },
+    { "slot": "three", "class": "priest",  "race": "Dwarf",    "role": "healer" },
+    { "slot": "four",  "class": "druid",   "race": "NightElf", "role": "healer" },
+    { "slot": "five",  "class": "mage",    "race": "Human",    "role": "dps"    },
+    { "slot": "six",   "class": "warlock", "race": "Gnome",    "role": "dps"    },
+    { "slot": "seven", "class": "hunter",  "race": "Dwarf",    "role": "dps"    },
+    { "slot": "eight", "class": "rogue",   "race": "NightElf", "role": "dps"    },
+    { "slot": "nine",  "class": "warrior", "race": "Human",    "role": "dps"    },
+    { "slot": "ten",   "class": "mage",    "race": "Gnome",    "role": "dps"    }
+  ]
+}
