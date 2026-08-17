@@ -62,6 +62,46 @@ Read that first; it is the contract. In short:
 **A batch of one is expected here, not a bug.** The normal trigger is four
 accumulated artifacts; a pilot runs below that deliberately.
 
+## What the pass does, in order
+
+Four phases, strictly sequential. Each depends on the one before it, and a
+failure stops everything after it:
+
+1. **Integrate** — cuts a scratch `integration/<buildId>` branch fresh from
+   `origin/cm-main` and merges every artifact branch onto it. Never pushed; it
+   exists only so one build can cover the whole batch.
+2. **Build** — one Docker image, `tortoise-cm:<buildId>`, from the integration
+   worktree. ~9.5 minutes. **One build for the entire batch, not one per
+   artifact** — that is the whole reason batching exists.
+3. **Validate** — brings the stack up once via `scripts/validate-stack.sh` and
+   then attempts whatever each artifact's `**In-game check:**` says is
+   scriptable. If the gate reports FAIL, no per-artifact check is attempted at
+   all: a check that "passed" against an unverified image is worse than no check.
+4. **PR** — pushes each artifact branch and opens one PR per artifact, in
+   sequence. This is the only phase that touches origin.
+
+**Merge order inside Integrate matters, and is not arbitrary:**
+
+- **Dependency order first.** An artifact whose `baseBranch` is another
+  artifact's `backlog/<slug>` (rather than `cm-main`) must be merged *after* that
+  dependency, never before.
+- **Then smallest diff first** among the independents, matching the "blast
+  radius, smallest first" approach in
+  `docs/superpowers/plans/2026-08-12-transport-stack-merge.md`. An early conflict
+  or build failure is then far cheaper to attribute to a specific artifact.
+- **A real conflict is a silent-revert trap, not routine text reconciliation** —
+  each branch was cut before the others' changes existed. Resolve toward
+  preserving both sides' intent. If that cannot be done without guessing which
+  side is "correct", **do not guess**: abort that one artifact's merge, let the
+  rest of the batch proceed, and list it in `excludedArtifacts` so it is retried
+  in a later batch rather than silently shipped wrong.
+
+**Which artifacts can even be in a batch.** An artifact with `depends-on:` was
+only implementable if its dependency had already reached `status: done` — the
+drain skips it otherwise. So in practice a batch holds independents, plus
+artifacts stacked on a dependency whose PR is already open. You will not have to
+resolve a dependency that is merely `implemented`; that combination cannot occur.
+
 ## The build will look like it did nothing. That is correct.
 
 `013` adds only shell scripts and JSON under `config/` and `tests/`, and **both
