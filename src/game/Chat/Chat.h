@@ -276,6 +276,10 @@ class ChatHandler
         bool HandleBGStartCommand(char *args);
         bool HandleBGStopCommand(char *args);
         bool HandleBGCustomCommand(char* args);
+        // tournament control plane -- see src/game/Commands/TournamentCommands.cpp
+        void TournamentEmit(std::string const& line);
+        bool HandleTournamentStatusCommand(char* args);
+        bool HandleTournamentCreateCommand(char* args);
         // Other
         bool HandleFreezeCommand(char *args);
         bool HandleUnfreezeCommand(char *args);
