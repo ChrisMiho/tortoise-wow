@@ -136,6 +136,12 @@ EOF
 
 `scripts/wsg-team-roster.txt` is the source of truth (`name|class|race|role|faction`).
 
+> Superseded for tournament work by `config/tournament/teams/*.json` — see
+> [TOURNAMENT-ROSTERS.md](TOURNAMENT-ROSTERS.md), where `roster.sh` does the
+> creating, the login/logout swap, and the DB verification for you. The flat file
+> stays valid: the JSON emits the same `name|class|race|role|faction` rows, so
+> both paths describe the same 20 bots.
+
 > **Names must be alphabetic only.** Digits are rejected at character *load*, not at
 > creation, and `"Bot is now online"` prints optimistically before the login is even
 > attempted — so digit-named bots look like they log in and instantly vanish. This cost
