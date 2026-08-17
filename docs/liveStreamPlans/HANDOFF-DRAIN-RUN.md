@@ -165,6 +165,12 @@ an executed `Bash` tool_use. That is what the guardrails are actually about:
 node scripts/check-guardrails.js <transcriptDir>
 ```
 
+**From Git Bash, not WSL.** `node` is a Windows install and is absent from the
+Ubuntu distro, so this one script inverts the usual rule — under WSL it fails
+with `node: command not found`. (`jq`, which forces everything else to WSL, is
+in turn absent from Git Bash. `bash tests/check-guardrails.test.sh` covers this
+script and also runs from Git Bash.)
+
 **Expect `EXECUTED VIOLATIONS: 0`.** The script also prints every docker command
 the agent really ran, which is the more useful half of the output — absence of a
 violation proves nothing on its own, because an agent that never touched docker

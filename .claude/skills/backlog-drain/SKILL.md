@@ -161,6 +161,10 @@ raising it — smaller batches are cheaper to bisect.
    still needed later, though: re-derive it for the batch call, per
    [Running a batch](#running-a-batch) step 3 below.
 
+   **The moment that call returns, check the script it actually ran** — see
+   [Verifying the workflow that actually ran](#verifying-the-workflow-that-actually-ran).
+   Do this on **every** tick, not once per session.
+
    Build the absolute path from the repo root (`git rev-parse --show-toplevel`)
    plus `docs/backlog/<filename>` — e.g.
    `D:/CodingProjects/tortoise-wow/tortoise-wow/docs/backlog/003-bots-stuck-at-spirit-healer.md`.
@@ -343,18 +347,20 @@ Triggered from step 11 above, or from one of the terminal-tick flushes (steps
 1, 3, 4, 5 — see [Stopping the loop](#stopping-the-loop)). Gather every
 artifact at `status: implemented`:
 
-1. For each, read back the `**Base:**`, `**Branch:**`, `**Summary:**`,
-   `**In-game check:**`, and (if present) `**Minor findings:**`/
-   `**Contested:**` lines appended when it moved to `implemented` (step 8 of
-   "One tick" above) — these carry `baseBranch`/`branchName`/`summary`/
-   `inGameCheck`/`minorFindings`/`contested`/`contestedFindings` forward,
-   since nothing else persists that state between the implement tick and the
-   batch pass. `minorFindings` reassembles as an array of the bullet strings
-   themselves (each already formatted `- <file>: <summary>`, per step 8's
-   exact format) — not `{file, summary}` objects — so pass them to
-   `backlog-batch` verbatim. `problem` and `acceptanceCriteria` don't need
-   their own lines — they're already in the artifact's own
-   **Problem:**/**Acceptance criteria:** sections.
+1. For each, read back only the `**Base:**` and `**Branch:**` lines appended
+   when it moved to `implemented` (step 8 of "One tick" above), plus whether a
+   `**Contested:**` block is present.
+
+   **Do not copy the long prose into the batch args.** `backlog-batch` reads
+   `**Summary:**`, `**In-game check:**`, `**Minor findings:**`,
+   `**Contested:**`, and the artifact's own **Problem:**/**Acceptance
+   criteria:** sections out of the artifact file itself, from the
+   `artifactPath` you pass. Inlining them instead cost ~11 KB per artifact —
+   43 KB for a batch of four, measured 2026-08-17 — which this skill had to
+   reproduce verbatim on every call. That scales linearly with batch size, and
+   every character of it is a chance to paraphrase text the PR body is
+   supposed to quote exactly. Step 8 must still *write* those lines onto the
+   artifact; the batch is what stopped needing them handed over.
 2. Compute a `buildId` — a short, sortable, human-readable string such as
    `<date>-<sequence>` (e.g. `20260813-1`). Sequence within a day so two
    batches on the same day don't collide, mirroring Task 2's migration-filename
@@ -378,16 +384,19 @@ artifact at `status: implemented`:
    as a batch-wide failure, so getting this wrong costs a stopped loop rather
    than a corrupted image — but it still costs the loop.
 3. Run `Workflow({ name: "backlog-batch", args: { buildId, batch: [...] } })`
-   where each batch entry is
-   `{ artifactPath, branchName, baseBranch, dependsOnPrUrl, summary, problem, acceptanceCriteria, inGameCheck, minorFindings, contested, contestedFindings }`
-   — reassembled from each artifact's file: the lines read back in step 1
-   supply `baseBranch`/`branchName`/`summary`/`inGameCheck`/`minorFindings`/
-   `contested`/`contestedFindings`, and the artifact's own
-   **Problem:**/**Acceptance criteria:** sections supply the rest.
-   `dependsOnPrUrl` isn't persisted separately — re-derive it the same way
-   step 5a (Task 3) did, from the `depends-on:` frontmatter and the
+   where each batch entry is exactly
+   `{ artifactPath, branchName, baseBranch, dependsOnPrUrl, contested }`
+   — identifiers only, five short fields, no prose. `artifactPath` must be
+   absolute; it is how the Validate and PR phases find everything else.
+   `contested` is a boolean and travels here only because it changes the PR
+   title and the status assigned in step 4; the contested *findings* are read
+   from the artifact. `dependsOnPrUrl` isn't persisted separately — re-derive
+   it the same way step 5a did, from the `depends-on:` frontmatter and the
    dependency artifact's `**Result:**` line, only when `baseBranch` isn't
    `cm-main`.
+
+   Immediately after this call returns its script path, run the freshness
+   check in [Verifying the workflow that actually ran](#verifying-the-workflow-that-actually-ran).
 4. On `{ success: true, results, buildId, imageTag }`: for each entry in
    `results` with a `prUrl`, edit that artifact's frontmatter to `status: done`
    (or `status: contested` if that entry's `contested` was true) and append
@@ -476,6 +485,42 @@ artifact at `status: implemented`:
    - This batch was triggered by one of the terminal-tick flushes instead of
      step 11 — that terminal tick's own `ScheduleWakeup({ stop: true })`
      still runs right after, per its own instructions.
+
+## Verifying the workflow that actually ran
+
+`Workflow({ name: "..." })` does not reliably serve the current file. On
+2026-08-17 `backlog-batch.js` ran **one edit behind** the repo copy while
+`backlog-issue.js` resolved fresh on three consecutive ticks in the same
+session. That time the stale delta was a comment, so nothing behaved
+differently — but two workflows disagreeing is the point: you cannot infer from
+one being current that the other is, and a check run once at the start of a
+drain says nothing about the twenty-ninth tick.
+
+Every `Workflow` result names a **saved script file**. Immediately after each
+invocation — every tick and every batch, not once per session — run:
+
+```
+node scripts/check-workflow-fresh.js "<the saved script path from the result>"
+```
+
+**Run this from Git Bash, not WSL** — the opposite of the usual rule here. `jq`
+is absent from Git Bash, which is why the tournament scripts need WSL; `node` is
+the mirror image, a Windows install that is not in the Ubuntu distro at all, so
+this and `scripts/check-guardrails.js` fail under WSL with
+`node: command not found`. The transcripts they read live on the Windows
+filesystem regardless.
+
+- **Exit 0** — byte-identical, or comment-only drift. Proceed. A `WARN` is
+  worth noting in the tick's report but is not a reason to stop.
+- **Exit 1** — a guardrail marker is missing, or the script differs
+  *functionally*. **Stop the loop.** Your edits did not reach that run: an
+  agent may have live docker access with none of the prohibitions, or the batch
+  may be missing its no-PR-opened stop. Re-invoke with
+  `Workflow({ scriptPath: ".claude/workflows/<name>.js", args: {...} })`, which
+  bypasses name resolution, and report the drift.
+
+This is cheap — one file read against another — and it is the only thing that
+notices when a mid-drain fix silently fails to take.
 
 ## Systemic vs. per-artifact failures
 

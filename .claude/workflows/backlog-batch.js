@@ -250,7 +250,16 @@ if (!built || built.built !== true) {
 }
 
 phase('Validate')
-const inGameChecklist = included.map((b) => `- ${b.artifactPath}: ${b.inGameCheck}`).join('\n')
+// The artifact file is the source of truth for every long field, and the batch
+// entries carry only identifiers. Inlining summary/problem/acceptanceCriteria/
+// inGameCheck into the args instead cost ~11 KB per artifact -- 43 KB for a
+// batch of four, measured 2026-08-17 -- which the drain has to reproduce
+// verbatim on every call. That scales linearly with batch size, and every
+// character of it is a chance to paraphrase something the PR body is supposed to
+// quote exactly. Reading the file is both cheaper and more faithful: the tick
+// already wrote those lines onto the artifact (backlog-drain SKILL.md step 8),
+// and the batch runs after it.
+const inGameChecklist = included.map((b) => `- ${b.artifactPath}`).join('\n')
 
 const validated = await agent(
   `Check Docker readiness first: run "docker info" (from Windows PowerShell,
@@ -317,8 +326,10 @@ const validated = await agent(
    ready-to-merge pull request. Exhaust the GIT_DIR fix above before you accept
    a FOREIGN failure as real.
 
-   Then, for each artifact below, attempt only what its inGameCheck says is
-   confirmable from logs or console output (not everything is -- most checks
+   Then, for each artifact listed at the end of this prompt, READ THAT ARTIFACT
+   FILE and find its "**In-game check:**" section -- the implement tick appended
+   it there, and it is the checklist for that artifact. Attempt only what it says
+   is confirmable from logs or console output (not everything is -- most checks
    here will legitimately be "not scriptable, needs a human" and that's
    expected, say so plainly rather than guessing at a result).
 
@@ -402,41 +413,55 @@ for (const item of included) {
     continue
   }
   const base = BASE_BRANCH_PATTERN.test(item.baseBranch || '') ? item.baseBranch : 'cm-main'
+  // Contested and minor findings both live on the artifact as "**Contested:**"
+  // and "**Minor findings:**" bullet blocks, written by the implement tick. Only
+  // the contested BOOLEAN travels in the args, because it changes the PR title
+  // and the status the drain assigns; the findings themselves are read from the
+  // file like everything else.
   const contestedSection = item.contested
     ? `
    8. A section headed "Contested — needs manual adjudication", listing exactly
-      these and nothing else, one bullet per line:
-${(item.contestedFindings || []).map((u) => `      - ${u}`).join('\n')}`
+      the artifact's "**Contested:**" bullets and nothing else, one per line.`
     : ''
-  // minorFindings arrives as an array of already-formatted "- <file>:
-  // <summary>" bullet strings (backlog-drain's SKILL.md persists them in
-  // that exact form and reassembles them verbatim) -- not {file, summary}
-  // objects, so use them as-is rather than re-formatting fields off them.
-  const minorSection = item.minorFindings && item.minorFindings.length > 0
-    ? `
-   9. A section headed "Automated review — non-blocking findings", one bullet
-      per line:
-${item.minorFindings.map((line) => `      ${line}`).join('\n')}`
-    : ''
+  const minorSection = `
+   9. If, and only if, the artifact has a "**Minor findings:**" block, a section
+      headed "Automated review — non-blocking findings" reproducing those bullets
+      verbatim, one per line. Omit the whole section if it has none.`
   const stackedSection = base !== 'cm-main'
     ? `
    0. A line before everything else: "Stacked on ${item.dependsOnPrUrl || base} — merge that first."`
     : ''
 
   const prResult = await agent(
-    `Push branch "${item.branchName}" to origin (it is unpushed local work from
-     an earlier Implement+Review run), then open a pull request against base
+    `FIRST, read the backlog artifact at ${item.artifactPath}. It holds every
+     piece of prose this pull request body needs, and it is the authority for
+     all of them -- do not paraphrase, summarise or reformat anything you take
+     from it:
+       - its "**Problem:**" section
+       - its "**Acceptance criteria:**" section
+       - the "**Summary:**" line the implement tick appended
+       - the "**In-game check:**" section
+       - its "**Minor findings:**" bullets, if it has any
+       - its "**Contested:**" bullets, if it has any
+     These are read from the file rather than passed in, because passing them
+     inline cost ~11 KB per artifact and every character was a chance to alter
+     text the PR body is meant to quote exactly.
+
+     Then push branch "${item.branchName}" to origin (it is unpushed local work
+     from an earlier Implement+Review run), and open a pull request against base
      branch ${base}: "gh pr create --repo ${GH_REPO} --head ${item.branchName}
-     --base ${base} --title ... --body ...".
+     --base ${base} --title ... --body ...". Write the body to a file and use
+     --body-file; these bodies contain backticks and newlines that do not
+     survive being passed as a shell argument.
 
      Title: ${item.contested ? '"[contested] " followed by a' : 'a'} short
      summary of the fix, in this repo's existing commit-message voice.
 
      Body must include, in this order:${stackedSection}
      1. The backlog artifact this implements: ${item.artifactPath}
-     2. Problem, quoted verbatim: "${item.problem}"
-     3. Summary of the change made: ${item.summary}
-     4. Acceptance criteria, quoted verbatim: "${item.acceptanceCriteria}"
+     2. The artifact's Problem section, quoted verbatim
+     3. Summary of the change made: the artifact's "**Summary:**" line
+     4. The artifact's Acceptance criteria section, quoted verbatim
      5. This line, verbatim: "Build: ${imageTag} — run TW_IMAGE=${imageTag}
         docker compose up against this image to test (docker-compose.yml
         resolves the image via TW_IMAGE; a bare 'docker compose up' silently
@@ -445,9 +470,9 @@ ${item.minorFindings.map((line) => `      ${line}`).join('\n')}`
         contains every artifact in build ${buildId} merged together, not
         just this PR's change alone — if something looks off while testing,
         it may belong to a batch-mate rather than this PR."
-     6. A section headed "In-game validation" containing this artifact's
-        checklist item verbatim: "${item.inGameCheck}", followed by what was
-        already attempted automatically in the shared batch validation pass:
+     6. A section headed "In-game validation" containing the artifact's
+        "**In-game check:**" section verbatim, followed by what was already
+        attempted automatically in the shared batch validation pass:
         "${perArtifactNote(item.artifactPath)}"
      7. A line stating this is a single-developer server: manual in-game
         testing is still required from you before merge${contestedSection}${minorSection}
