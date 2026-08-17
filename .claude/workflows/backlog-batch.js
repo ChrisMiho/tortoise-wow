@@ -204,6 +204,14 @@ const built = await agent(
    wsl.exe that started them exits. This has bitten more than one agent on this
    host; see docs/DOCKER.md, "Things that will cost you an afternoon".
 
+   Set your command timeout to at least 900000 ms (15 min). Measured on
+   2026-08-16, a real batch build took 10m11s wall clock -- so the obvious
+   600000 ms (10 min) is UNDER the observed build time, and the build crosses
+   it and forces the harness to hand the wait off to a background task
+   mid-compile. That handoff has held every time so far and is not the same
+   thing as backgrounding the build yourself, but do not rely on it: give the
+   command room to finish in the foreground where you can see its exit code.
+
    Run "docker build" itself from Windows PowerShell directly against that
    worktree's path -- the build context is just the repo directory and needs
    no WSL path semantics. Do NOT use a wrapped "wsl -d Ubuntu -- bash -lc
@@ -250,7 +258,11 @@ const validated = await agent(
    where <main-checkout> is the repository root of the ORIGINAL session
    directory, not this worktree -- .env is gitignored and exists only there.
    Resolve it with "git -C <worktree> worktree list": the FIRST entry is the
-   main checkout. The script must be run from WSL, not Git Bash.
+   main checkout. The script must be run from WSL, not Git Bash. If you launch
+   it from Git Bash as "wsl -d Ubuntu -- bash <path>", prefix the whole command
+   with MSYS_NO_PATHCONV=1: MSYS rewrites a standalone "/mnt/c/..." argument
+   into "C:/Program Files/Git/mnt/c/...", so the script appears not to exist. A
+   path inside a longer "bash -lc '...'" string is not rewritten.
 
    TW_SRC_DIR is NOT optional here. The gate compares the image's stamped
    revision against HEAD of the repo it reads git from, which defaults to the

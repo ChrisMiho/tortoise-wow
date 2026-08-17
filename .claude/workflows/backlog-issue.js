@@ -201,7 +201,14 @@ const implemented = await agent(
       host and require_cmd hard-exits, and MSYS rewrites POSIX paths into C:\
       ones. Do NOT put a variable inside a wrapped "wsl -d Ubuntu -- bash -lc
       '...'" one-liner -- that returns plausible-but-wrong output silently.
-      Write a script file and invoke that.
+      Write a script file and invoke that. Invoking it is its own trap: MSYS
+      rewrites any STANDALONE argument beginning with "/", so from Git Bash
+      "wsl -d Ubuntu -- bash /mnt/c/path/script.sh" dies with "No such file or
+      directory" naming "C:/Program Files/Git/mnt/c/path/script.sh" -- a path
+      you never typed, and nothing to do with your script. Prefix the command
+      with MSYS_NO_PATHCONV=1, or invoke it from PowerShell. A path INSIDE a
+      longer argument (bash -lc 'cd /mnt/c/... && ...') is NOT rewritten, which
+      is why that form works and the bare one does not.
 
    One trap worth knowing when you do query the database: wsg_mysql sends
    stderr to /dev/null, so a query that fails returns silence rather than an

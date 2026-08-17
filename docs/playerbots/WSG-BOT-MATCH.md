@@ -51,7 +51,15 @@ Requirements:
 
 ### Running commands
 
-Windows Git Bash mangles nested quotes through `wsl bash -lc`. Always use a heredoc:
+Windows Git Bash mangles nested quotes through `wsl bash -lc`. Always use a heredoc.
+
+The `MSYS_NO_PATHCONV=1` prefix below is **not decoration and not about quoting** —
+it is a separate fix for a separate bug. MSYS rewrites any *standalone* argument
+beginning with `/` into `C:/Program Files/Git/...`, so
+`wsl -d Ubuntu -- bash /mnt/c/foo.sh` fails with `No such file or directory`
+naming a path you never typed. A path *inside* a longer argument
+(`bash -lc 'cd /mnt/c/... && ...'`) is not rewritten, which is why that form
+works and the bare one does not. Keep the prefix even when the quoting looks fine:
 
 ```bash
 MSYS_NO_PATHCONV=1 wsl -d Ubuntu -u deck -- bash <<'EOF'

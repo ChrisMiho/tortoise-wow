@@ -293,6 +293,14 @@ Only after Stages 1-4. Then `/loop backlog-drain`.
   `git worktree list` — the FIRST entry.
 - **Run scripts from WSL, never Git Bash.** MSYS rewrites POSIX paths into `C:\`
   ones; `rebuild.sh` fails closed on `$MSYSTEM` for that reason.
+- **Prefix `wsl` calls from Git Bash with `MSYS_NO_PATHCONV=1`.** MSYS rewrites
+  any *standalone* argument beginning with `/` into `C:/Program Files/Git/...`
+  (that is the MSYS root — check with `cd / && pwd -W`), so
+  `wsl -d Ubuntu -- bash /mnt/c/foo.sh` fails with `No such file or directory`
+  naming a path you never typed. Verified on this host 2026-08-16. A path
+  *inside* a longer argument — `bash -lc 'cd /mnt/c/... && ...'`, the form every
+  artifact's in-game checklist uses — is **not** rewritten and works as written.
+  This is the same MSYS conversion that mangles `git <rev>:<path>` arguments.
 - **Never put a shell variable inside a wrapped `wsl -d Ubuntu -- bash -lc '...'`
   one-liner.** It returns plausible-but-wrong output silently — during scoping it
   reported an empty directory and a wrong `du` total in one command, and
