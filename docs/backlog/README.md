@@ -15,7 +15,7 @@ sequence. A recycled number silently repoints every old commit, PR and
 `depends-on:` reference at a different issue.
 
 <!-- BACKLOG-COUNTER -->
-**Highest artifact number used: `012`. Next new artifact: `013`.**
+**Highest artifact number used: `045`. Next new artifact: `046`.**
 <!-- /BACKLOG-COUNTER -->
 
 `backlog-scope` bumps that counter when it creates an artifact, and also

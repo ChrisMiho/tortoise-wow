@@ -3,6 +3,25 @@
 Paste the section below to a fresh agent. It assumes no memory of the planning
 or Plan 00 execution conversations.
 
+**Run this on Opus with the 1M context window.** The nine plans are ~7,900 lines
+and the dependency ordering has to be reasoned across all of them at once — a
+smaller window forces summarising them one at a time, and cross-plan
+dependencies are exactly the detail that gets lost in a summary. The work is
+also judgement-heavy rather than mechanical: Plan 00 proved the plans contain
+defects that must be caught while scoping, and the consumer is an **unattended**
+drain, so an unverifiable acceptance criterion turns into an agent that fails
+quietly or claims a success it did not earn.
+
+Branch: `feature/tournament-backlog-scope`, cut from `origin/cm-main` at
+`55cff54` (the merge of PR #21, which is what put Plan 00 on the trunk).
+
+**Docker is at a deliberate fresh slate** (2026-08-16): every image was deleted
+except the rollback anchor `tortoise-cm:c06b2fb`, and `.env` points `TW_IMAGE` at
+it. Scoping does not build anything, so this does not affect your work — but do
+not scope artifacts whose acceptance criteria assume a pre-existing image, and
+expect the first drain build to re-pull base images. See `docs/DOCKER.md`,
+"Current state: fresh slate".
+
 ---
 
 ## Your task
@@ -104,28 +123,28 @@ rejected artifact in the middle forces a rebase of everything above it — which
 defeats the point of catching issues early. Independent artifacts should cut
 fresh so their PRs can merge in any order.
 
-**PREREQUISITE — check this before scoping anything, and tell the human if it is
-still true.** A valid base branch is only `cm-main` or `backlog/<slug>`
-(`BASE_BRANCH_PATTERN` in `.claude/workflows/backlog-issue.js`). As of
-2026-08-16, `origin/cm-main` does **not** contain Plan 00:
+**PREREQUISITE — already satisfied, recorded here so it is not re-litigated.** A
+valid base branch is only `cm-main` or `backlog/<slug>` (`BASE_BRANCH_PATTERN` in
+`.claude/workflows/backlog-issue.js`), and `cm-main` did not contain Plan 00
+until PR #21 merged on 2026-08-16 (`55cff54`). It does now: `validate-stack.sh`,
+the `tests/` harness, and the `.dockerignore` exclusions for `config/`, `tests/`
+and `logs/` are all present. That last one matters because Plan 00 Task 8 states
+it **must land before Plan 01 creates `config/`**, and Plan 01 is the first thing
+scoped here.
 
-- `scripts/validate-stack.sh` — missing
-- `tests/lib/assert.sh` — missing
-- `.dockerignore` exclusions for `config/`, `tests/`, `logs/` — missing
-
-Plan 00 Task 8 states its `.dockerignore` fix **must land before Plan 01 creates
-`config/`**, and Plan 01 is the first thing being scoped here. So
-`feature/bot-tournament-plans` needs to be merged into `cm-main` first, or the
-first artifact is cut from a tree missing the foundation everything else assumes.
-
-Verify with:
+Re-verify only if you have reason to doubt it:
 
 ```bash
-git ls-tree -r --name-only origin/cm-main -- scripts/validate-stack.sh
-git show origin/cm-main:.dockerignore | grep -E '^(config|tests|logs)/$'
+git fetch origin
+git ls-tree -r --name-only origin/cm-main -- scripts/validate-stack.sh tests/lib/assert.sh
+git grep -h -E '^(config|tests|logs)/$' origin/cm-main -- .dockerignore
 ```
 
-If those come back empty, **stop and raise it** rather than scoping around it.
+**Use exactly those forms.** Git Bash rewrites `<rev>:<path>` arguments, so
+`git show origin/cm-main:.dockerignore` silently becomes
+`origin\cm-main;.dockerignore` and dies — and if its stderr is redirected the
+failure reads as "the file does not contain this", a false negative that already
+fooled one session. `git grep` with a `--` pathspec is safe in both shells.
 
 ## Acceptance criteria must be checkable without a human
 

@@ -165,6 +165,68 @@ const implemented = await agent(
    another tick generates a migration with the same timestamp — the artifact
    number differs by construction.
 
+   THE LIVE STACK IS AVAILABLE TO YOU. You may start, stop and restart
+   containers, query the database, and send console commands, if an acceptance
+   criterion actually needs it. Bring up only what you need -- most work needs
+   the database alone, which requires no server image and no build:
+
+     docker compose --env-file <main-checkout>/.env up -d db
+
+   Resolve <main-checkout> with "git -C <this worktree> worktree list"; the
+   FIRST entry is the main checkout, and .env is gitignored so it exists only
+   there. Wait for "docker inspect --format '{{.State.Health.Status}}' tcm-db"
+   to read healthy, about 20 seconds.
+
+   Five rules on that access, each of which has already cost someone a session:
+
+   1. NEVER "docker compose down -v". The tortoise-wow-v2_dbdata volume is the
+      entire world and it has been lost once already. Plain "down", or just
+      leave the database running.
+   2. NEVER a bare "docker attach". mangosd treats console EOF as "shut down
+      the world" and the compose service is restart:"no". Use wsg_console from
+      docs/playerbots/wsg/lib/wsg-bots-common.sh, which detaches properly, and
+      batch your commands into as few attaches as you can.
+   3. DO NOT run a Docker build. There is no incremental build here -- "COPY .
+      /src" never cache-hits, so every build recompiles all ~1169 translation
+      units and takes ~9.5 minutes no matter what changed. A later
+      backlog-batch pass builds this branch together with its batch; that is
+      the compile gate, and running one here just burns ten minutes.
+   4. Because of 3, THE ONLY SERVER IMAGE ON THIS HOST IS A ROLLBACK ANCHOR
+      THAT PREDATES EVERY UNMERGED CHANGE. Existing commands (rndbot, .bg, and
+      anything already on cm-main) work against it. Any console command added
+      by this backlog series does NOT exist in it, so "there is no such
+      subcommand" against a running server proves nothing about your code --
+      do not treat it as a failure, and do not rewrite working code chasing it.
+   5. Run scripts from WSL, never Git Bash: jq is absent from Git Bash on this
+      host and require_cmd hard-exits, and MSYS rewrites POSIX paths into C:\
+      ones. Do NOT put a variable inside a wrapped "wsl -d Ubuntu -- bash -lc
+      '...'" one-liner -- that returns plausible-but-wrong output silently.
+      Write a script file and invoke that. Invoking it is its own trap: MSYS
+      rewrites any STANDALONE argument beginning with "/", so from Git Bash
+      "wsl -d Ubuntu -- bash /mnt/c/path/script.sh" dies with "No such file or
+      directory" naming "C:/Program Files/Git/mnt/c/path/script.sh" -- a path
+      you never typed, and nothing to do with your script. Prefix the command
+      with MSYS_NO_PATHCONV=1, or invoke it from PowerShell. A path INSIDE a
+      longer argument (bash -lc 'cd /mnt/c/... && ...') is NOT rewritten, which
+      is why that form works and the bare one does not.
+
+   One more Windows/WSL trap, and it will bite any git command you run from
+   WSL inside this worktree: a worktree's ".git" is a FILE, not a directory,
+   holding one line like
+   "gitdir: C:/Coding/tortoise-wow/tortoise-wow/.git/worktrees/<name>". That is
+   a WINDOWS path, which git under WSL cannot resolve, so git there fails with
+   "fatal: not a git repository" even though the worktree is perfectly valid.
+   Do not conclude your checkout is broken. Either run git from the Windows
+   side (PowerShell or Git Bash, both fine), or export GIT_DIR with that same
+   path rewritten into its "/mnt/c/..." form. This cost the first batch run a
+   false provenance failure before it was diagnosed.
+
+   One trap worth knowing when you do query the database: wsg_mysql sends
+   stderr to /dev/null, so a query that fails returns silence rather than an
+   error, and reads exactly like "no rows matched". If a query unexpectedly
+   returns nothing, re-run it through a bare "docker exec ... mysql" with
+   stderr visible before drawing any conclusion from the emptiness.
+
    If, after investigating, the artifact's acceptance criteria cannot be
    satisfied in this environment -- missing data, missing tooling, a decision
    only a human can make, not something any code change here can fix -- say
@@ -250,7 +312,21 @@ const reviews = await parallel(lenses.map((lens) => () =>
 
      Report every real finding with a one-sentence summary, the file it's in,
      and a severity of "blocking" or "minor". Return an empty findings array
-     if there's nothing to flag.`,
+     if there's nothing to flag.
+
+     IF YOUR REVIEW DIMENSION DOES NOT APPLY TO THIS DIFF AT ALL, an empty
+     findings array is the correct and complete answer. Most artifacts in this
+     backlog are entirely shell scripts, JSON config or documentation, and a
+     lens looking for pointer lifetime or lock discipline has nothing to say
+     about those -- that is expected, not a problem, and not a finding.
+
+     Do NOT reach for blocked: true to express it. blocked: true is a claim
+     about the ARTIFACT, not about your lens: it asserts that the artifact's
+     own acceptance criteria cannot be satisfied in this environment no matter
+     what anyone codes -- missing data, missing tooling, a decision only a
+     human can make. It halts the work and requires a human to triage it. A
+     lens that has merely found its own dimension irrelevant to the diff must
+     never set it.`,
     { phase: 'Review', label: `review:${lens.key}`, schema: REVIEW_SCHEMA, effort: 'medium' }
   )
 ))
