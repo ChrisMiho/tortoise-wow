@@ -345,6 +345,21 @@ class BattleGround
         void ModifyStartDelayTime(int diff) { m_StartDelayTime -= diff; }
         void SetStartDelayTime(int Time)    { m_StartDelayTime = Time; }
 
+        // Grace window, in ms, during which Update() will NOT delete an instance
+        // that has no players in it and nobody invited to it. Zero for every
+        // instance the queue builds -- the queue invites players in the same call
+        // that creates the instance, so it has never needed one, and leaving it
+        // zero keeps that path behaving exactly as before.
+        //
+        // The tournament control plane (Commands/TournamentCommands.cpp) needs
+        // one: `.tournament create` registers an instance a whole console
+        // round-trip before `.tournament add` can invite anyone into it, and
+        // without a window Update() destroys it on the very next map tick, so the
+        // instance id it just printed is already dangling. Deliberately a
+        // countdown rather than a keep-alive flag, so an instance that is created
+        // and then never filled still reaps itself.
+        void SetEmptyHoldTime(uint32 ms)    { m_EmptyHoldTimer = ms; }
+
         void SetMaxPlayersPerTeam(uint32 MaxPlayers) { m_MaxPlayersPerTeam = MaxPlayers; }
         void SetMinPlayersPerTeam(uint32 MinPlayers) { m_MinPlayersPerTeam = MinPlayers; }
 
@@ -595,6 +610,7 @@ class BattleGround
         int32  m_StartDelayTime;
         bool   m_PrematureCountDown;
         uint32 m_PrematureCountDownTimer;
+        uint32 m_EmptyHoldTimer;                            // see SetEmptyHoldTime; 0 on every queue-built instance
         char const *m_Name;
 
         /* Player lists */
