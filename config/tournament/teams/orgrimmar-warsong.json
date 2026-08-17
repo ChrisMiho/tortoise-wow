@@ -1,0 +1,19 @@
+{
+  "id": "orgrimmar-warsong",
+  "displayName": "Orgrimmar Warsong",
+  "faction": "H",
+  "namePrefix": "Wsgh",
+  "gearTier": "base",
+  "roster": [
+    { "slot": "one",   "class": "warrior", "race": "Orc",    "role": "tank"   },
+    { "slot": "two",   "class": "druid",   "race": "Tauren", "role": "tank"   },
+    { "slot": "three", "class": "priest",  "race": "Undead", "role": "healer" },
+    { "slot": "four",  "class": "shaman",  "race": "Troll",  "role": "healer" },
+    { "slot": "five",  "class": "mage",    "race": "Undead", "role": "dps"    },
+    { "slot": "six",   "class": "warlock", "race": "Orc",    "role": "dps"    },
+    { "slot": "seven", "class": "hunter",  "race": "Troll",  "role": "dps"    },
+    { "slot": "eight", "class": "rogue",   "race": "Undead", "role": "dps"    },
+    { "slot": "nine",  "class": "warrior", "race": "Troll",  "role": "dps"    },
+    { "slot": "ten",   "class": "shaman",  "race": "Orc",    "role": "dps"    }
+  ]
+}

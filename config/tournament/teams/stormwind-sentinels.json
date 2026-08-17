@@ -1,0 +1,19 @@
+{
+  "id": "stormwind-sentinels",
+  "displayName": "Stormwind Sentinels",
+  "faction": "A",
+  "namePrefix": "Wsga",
+  "gearTier": "base",
+  "roster": [
+    { "slot": "one",   "class": "warrior", "race": "Human",    "role": "tank"   },
+    { "slot": "two",   "class": "paladin", "race": "Dwarf",    "role": "tank"   },
+    { "slot": "three", "class": "priest",  "race": "Human",    "role": "healer" },
+    { "slot": "four",  "class": "druid",   "race": "NightElf", "role": "healer" },
+    { "slot": "five",  "class": "mage",    "race": "Gnome",    "role": "dps"    },
+    { "slot": "six",   "class": "warlock", "race": "Human",    "role": "dps"    },
+    { "slot": "seven", "class": "hunter",  "race": "NightElf", "role": "dps"    },
+    { "slot": "eight", "class": "rogue",   "race": "Human",    "role": "dps"    },
+    { "slot": "nine",  "class": "warrior", "race": "Dwarf",    "role": "dps"    },
+    { "slot": "ten",   "class": "mage",    "race": "Human",    "role": "dps"    }
+  ]
+}
