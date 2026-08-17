@@ -198,7 +198,7 @@ passing the defect downstream to an unattended agent.
 - **`docker compose` needs `--env-file`** anywhere other than the main checkout;
   `.env` is gitignored and exists only there.
 - **Always pass `TW_IMAGE` explicitly** — it defaults to `tortoise-cm:local`.
-- **This host reboots itself overnight for Windows Update.** Commit as you go.
+- **Commit as you go.** An interruption should cost one task, not a session.
 
 ## What not to do
 

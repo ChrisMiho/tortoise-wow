@@ -177,27 +177,55 @@ const implemented = await agent(
    there. Wait for "docker inspect --format '{{.State.Health.Status}}' tcm-db"
    to read healthy, about 20 seconds.
 
-   Five rules on that access, each of which has already cost someone a session:
+   Six rules on that access. Most have already cost someone a session:
 
-   1. NEVER "docker compose down -v". The tortoise-wow-v2_dbdata volume is the
-      entire world and it has been lost once already. Plain "down", or just
-      leave the database running.
-   2. NEVER a bare "docker attach". mangosd treats console EOF as "shut down
-      the world" and the compose service is restart:"no". Use wsg_console from
+   1. NEVER destroy the database volume. tortoise-wow-v2_dbdata is the entire
+      world and it has been lost once already. Know which commands can
+      actually do it, because the notorious one cannot:
+      - "docker compose down -v" FROM THIS REPO is inert against it. The
+        volume is declared external: true in docker-compose.yml, and compose
+        never creates or removes an external volume. Measured 2026-08-17
+        against throwaway stacks: the external volume survived, a managed
+        control volume was destroyed by the same command. Still prefer plain
+        "down" -- the habit is what protects you if anyone ever edits that
+        external: declaration out.
+      - "docker compose down -v" run from ~/tortoise-wow-server-V2 DOES
+        destroy it. That stack is compose project tortoise-wow-v2 and declares
+        the same volume as MANAGED -- which is where the volume's name comes
+        from, and almost certainly how it was lost the first time. You have no
+        reason to run anything from that directory.
+      - "docker volume prune", "docker system prune --volumes" and Docker
+        Desktop's cleanup button destroy it outright. "external" is a
+        compose-file concept the Docker engine knows nothing about, so with
+        the stack down the engine reports this volume 100% reclaimable. THESE
+        are the commands that actually cost you the world. Never run them.
+   2. NEVER delete or retag images to reclaim space. "docker image prune -a"
+      takes tortoise-cm:c06b2fb, the rollback anchor -- and because of rule 4
+      nothing rebuilds it during a drain, so that is the only working server
+      gone, with a ~10 minute compile as the cheapest way back. Plain "docker
+      image prune" (no -a) is safe. Do not delete integration/* branches or
+      their images either: that branch ref is the only thing keeping a built
+      image's stamped commit reachable, and without it the image can never be
+      validated again.
+   3. NEVER a bare "docker attach". Use wsg_console from
       docs/playerbots/wsg/lib/wsg-bots-common.sh, which detaches properly, and
-      batch your commands into as few attaches as you can.
-   3. DO NOT run a Docker build. There is no incremental build here -- "COPY .
+      batch your commands into as few attaches as you can. mangosd treats
+      console EOF as "shut down the world". It currently runs
+      restart: unless-stopped, so an EOF costs a restart and every online
+      session's unsaved state rather than a permanently dead world -- but a
+      match in progress is still lost, and db is restart:"no".
+   4. DO NOT run a Docker build. There is no incremental build here -- "COPY .
       /src" never cache-hits, so every build recompiles all ~1169 translation
       units and takes ~9.5 minutes no matter what changed. A later
       backlog-batch pass builds this branch together with its batch; that is
       the compile gate, and running one here just burns ten minutes.
-   4. Because of 3, THE ONLY SERVER IMAGE ON THIS HOST IS A ROLLBACK ANCHOR
+   5. Because of 4, THE ONLY SERVER IMAGE ON THIS HOST IS A ROLLBACK ANCHOR
       THAT PREDATES EVERY UNMERGED CHANGE. Existing commands (rndbot, .bg, and
       anything already on cm-main) work against it. Any console command added
       by this backlog series does NOT exist in it, so "there is no such
       subcommand" against a running server proves nothing about your code --
       do not treat it as a failure, and do not rewrite working code chasing it.
-   5. Run scripts from WSL, never Git Bash: jq is absent from Git Bash on this
+   6. Run scripts from WSL, never Git Bash: jq is absent from Git Bash on this
       host and require_cmd hard-exits, and MSYS rewrites POSIX paths into C:\
       ones. Do NOT put a variable inside a wrapped "wsl -d Ubuntu -- bash -lc
       '...'" one-liner -- that returns plausible-but-wrong output silently.
@@ -313,6 +341,12 @@ const reviews = await parallel(lenses.map((lens) => () =>
      Report every real finding with a one-sentence summary, the file it's in,
      and a severity of "blocking" or "minor". Return an empty findings array
      if there's nothing to flag.
+
+     Give "file" as a REPO-RELATIVE path (scripts/tournament/roster.sh), never
+     an absolute one. Minor findings are copied verbatim into the PR body, so
+     an absolute path both leaks a machine-specific location and, since it
+     names the main checkout, points at a path where this branch's file does
+     not exist -- which reads to a human as a broken reference.
 
      IF YOUR REVIEW DIMENSION DOES NOT APPLY TO THIS DIFF AT ALL, an empty
      findings array is the correct and complete answer. Most artifacts in this

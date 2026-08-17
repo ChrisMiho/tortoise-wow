@@ -126,10 +126,10 @@ Two further levers, both in Plan 00:
   starting the sequence or not at all — retrofitting mid-run changes
   `DOCKERFILE_SHA` and makes every earlier image report drift.
 - Plan 04's live verification runs real matches at up to 25 minutes each.
-- **This host reboots itself overnight for Windows Update.** Every long-running step
-  in these plans writes results to disk as it goes, and Plan 04's tournament state is
-  explicitly resumable — but a drain tick interrupted mid-artifact leaves it at
-  `status: in-progress`, which is a human reset, not an automatic retry.
+- **Long-running steps write results to disk as they go**, and Plan 04's tournament
+  state is explicitly resumable — a multi-hour run should never be one interruption
+  away from losing everything. Note that a drain tick interrupted mid-artifact
+  leaves it at `status: in-progress`, which is a human reset, not an automatic retry.
 
 ## What is deliberately not here
 

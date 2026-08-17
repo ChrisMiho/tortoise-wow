@@ -115,6 +115,17 @@ const integrated = await agent(
 
    ${batchDescription}
 
+   integration/${buildId} MUST NOT already exist -- check before you create it.
+   If it does, this buildId collides with an earlier batch from the same day.
+   A drain runs several batches per day and the sequence number is assigned by
+   hand, so this is a real possibility, not a theoretical one. Do NOT reuse,
+   reset, or merge onto the existing branch, and do NOT delete it: that ref is
+   the only thing keeping the commit tortoise-cm:${buildId} was stamped from
+   reachable, and reusing the tag would overwrite an already-validated image.
+   Stop instead, and return every artifactPath in excludedArtifacts -- that
+   reports the collision as a clean batch-wide failure rather than shipping
+   this batch against the wrong image.
+
    Merge each artifact's branch onto integration/${buildId} in dependency
    order -- an artifact whose base above is another artifact's backlog/<slug>
    branch (not cm-main) must be merged after that dependency, never before.
@@ -461,6 +472,38 @@ ${item.minorFindings.map((line) => `      ${line}`).join('\n')}`
 
 for (const artifactPath of excluded) {
   results.push({ artifactPath, excluded: true })
+}
+
+// If NOT ONE pull request was opened, nothing reached origin, and that is a
+// batch-wide failure -- not N per-artifact ones. Returning success: true here
+// used to be self-perpetuating rather than merely wrong: backlog-drain leaves
+// every artifact at status: implemented on that path, and its step 11 re-counts
+// implemented artifacts every tick to decide whether to batch. So the threshold
+// stayed met and EVERY subsequent tick fired another ~10 minute build, with the
+// batch growing each time and nothing ever stopping it -- the circuit breaker
+// only counts `failed`, and the batch-wide stop needs success: false. An
+// expired gh token or a network blip partway through an unattended run would
+// be enough to trigger it, and it would then consume the rest of the window in
+// ~10 minute builds with no PR to show for any of them. (Found by reading the
+// code during the 2026-08-17 guardrail check, before it had a chance to fire.)
+// Failing here routes into "Running a batch" step 5, which stops the loop and
+// leaves the artifacts implemented for a human to retry.
+//
+// A PARTIAL failure deliberately still returns success: true: at least one PR
+// exists, the batch made real progress, and the artifacts that missed out drop
+// back below the threshold and are picked up by the next batch normally.
+const opened = results.filter((r) => r.prUrl)
+if (opened.length === 0) {
+  const perArtifact = results
+    .filter((r) => !r.prUrl && r.prReason)
+    .map((r) => `${r.artifactPath}: ${r.prReason}`)
+    .join(' | ')
+  return {
+    success: false,
+    reason: `batch ${buildId} built and validated as ${imageTag}, but not one pull request was opened -- `
+      + `nothing reached origin. This is usually gh auth or connectivity, not the code: check `
+      + `"gh auth status" before retrying, since the image itself already passed the stack gate. ${perArtifact}`,
+  }
 }
 
 return { success: true, buildId, imageTag, dockerReady: validated.dockerReady, results }

@@ -361,6 +361,22 @@ artifact at `status: implemented`:
    fix. Do this with a real shell date command (`date +%Y%m%d` or PowerShell's
    `Get-Date`) — this skill runs as an agent with tool access, unlike the
    Workflow scripts it calls, so it's fine to use a real clock here.
+
+   **Derive the sequence from what already exists — do not assume `-1`.** A
+   full drain runs several batches in a single day, so a same-day collision is
+   the normal case here rather than an edge one. Reusing a `buildId` overwrites
+   an already-built, already-validated image and collides with an
+   `integration/<buildId>` branch that step 7 below deliberately never deletes.
+   Check both namespaces and take the next free number:
+
+   ```
+   git branch --list 'integration/<date>-*'
+   docker images --format '{{.Repository}}:{{.Tag}}' --filter reference=tortoise-cm
+   ```
+
+   `backlog-batch`'s Integrate phase refuses a colliding branch and reports it
+   as a batch-wide failure, so getting this wrong costs a stopped loop rather
+   than a corrupted image — but it still costs the loop.
 3. Run `Workflow({ name: "backlog-batch", args: { buildId, batch: [...] } })`
    where each batch entry is
    `{ artifactPath, branchName, baseBranch, dependsOnPrUrl, summary, problem, acceptanceCriteria, inGameCheck, minorFindings, contested, contestedFindings }`

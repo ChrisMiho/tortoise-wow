@@ -28,8 +28,8 @@ calls it. Only the two teams playing are ever logged in.
   clock expired" as a normal outcome with a defined result, not a hang.
 - **Only 20 tournament bots online at a time.** Log the previous pairing out before
   logging the next in.
-- **Write state to disk after every change.** Overnight runs on this host die to
-  Windows Update; a run that only persists at the end loses everything.
+- **Write state to disk after every change.** A run that only persists at the end
+  loses everything to any interruption — crash, power cut, or an operator stop.
 - **`characters.map` lags reality by up to 60 s** (`PlayerSave.Interval`). Never
   conclude a match ended from a single stale read; and expect phantom `map=489`
   rows for a minute or two after any restart.
@@ -354,8 +354,8 @@ Expected: FAIL — `scripts/tournament/lib/state.sh: No such file or directory`
 # Tournament run state. Source, don't execute.
 #
 # Written to disk after EVERY change, via write-to-temp-then-rename so a kill
-# between the two never leaves a truncated file. Overnight runs on this host die
-# to Windows Update; a run that only persists at the end loses the whole night.
+# between the two never leaves a truncated file. A run that only persists at the
+# end loses the whole night to a single interruption.
 
 state_file() { printf '%s/state.json\n' "$1"; }
 

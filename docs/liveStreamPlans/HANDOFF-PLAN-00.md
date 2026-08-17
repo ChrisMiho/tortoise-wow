@@ -64,8 +64,8 @@ git rev-parse --abbrev-ref HEAD                     # expect feature/bot-tournam
 - **Git Bash mangles `rev:path` arguments.** `git cat-file -e <rev>:<path>` returns
   silent false negatives. Use `git ls-tree -r --name-only <ref> -- <path>`, or
   prefix with `MSYS_NO_PATHCONV=1`.
-- **This host reboots itself overnight for Windows Update.** Commit after every
-  task, as the plan says. Do not batch nine tasks into one commit at the end.
+- **Commit after every task, as the plan says.** Do not batch nine tasks into one
+  commit at the end — an interruption then costs all nine.
 
 ---
 

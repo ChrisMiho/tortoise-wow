@@ -53,9 +53,9 @@ Step 1 (writing the script).
 - **The RSS column is located by reading the trace's header row**, not by a
   hardcoded field position — the schema could gain a column and a hardcoded index
   would then silently read the wrong field.
-- The trace is written continuously to disk under `--out`; **this host reboots
-  itself overnight for Windows Update**, and a trace held in memory until the end
-  would be lost entirely.
+- The trace is written continuously to disk under `--out`; a ramp to 1000 bots is
+  long enough that it will sometimes be interrupted, and a trace held in memory
+  until the end would be lost entirely.
 - `bash -n scripts/standup-1000.sh` exits 0.
 
 **Notes:**
