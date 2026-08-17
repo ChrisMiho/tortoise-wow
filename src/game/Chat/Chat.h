@@ -280,6 +280,11 @@ class ChatHandler
         void TournamentEmit(std::string const& line);
         bool HandleTournamentStatusCommand(char* args);
         bool HandleTournamentCreateCommand(char* args);
+        bool HandleTournamentAddCommand(char* args);
+        bool HandleTournamentMembersCommand(char* args);
+        bool HandleTournamentStartCommand(char* args);
+        bool HandleTournamentStopCommand(char* args);
+        bool HandleTournamentResultCommand(char* args);
         // Other
         bool HandleFreezeCommand(char *args);
         bool HandleUnfreezeCommand(char *args);

@@ -754,6 +754,11 @@ ChatCommand * ChatHandler::getCommandTable()
     {
         { "status",            SEC_ADMINISTRATOR,           true,  &ChatHandler::HandleTournamentStatusCommand, "", nullptr},
         { "create",            SEC_ADMINISTRATOR,           true,  &ChatHandler::HandleTournamentCreateCommand, "", nullptr},
+        { "add",               SEC_ADMINISTRATOR,           true,  &ChatHandler::HandleTournamentAddCommand,    "", nullptr},
+        { "members",           SEC_ADMINISTRATOR,           true,  &ChatHandler::HandleTournamentMembersCommand,"", nullptr},
+        { "start",             SEC_ADMINISTRATOR,           true,  &ChatHandler::HandleTournamentStartCommand,  "", nullptr},
+        { "stop",              SEC_ADMINISTRATOR,           true,  &ChatHandler::HandleTournamentStopCommand,   "", nullptr},
+        { "result",            SEC_ADMINISTRATOR,           true,  &ChatHandler::HandleTournamentResultCommand, "", nullptr},
         { nullptr,             0,                        false, nullptr,                                     "", nullptr}
     };
 
