@@ -406,27 +406,51 @@ artifact at `status: implemented`:
    scaffold-branch sweep — deleting an unreachable commit here would lose the
    only copy of it:
 
-   ```
-   git merge-base --is-ancestor integration/<buildId> origin/cm-main
-   ```
-
-   or, for each artifact actually included in the batch whose branch was
-   successfully pushed (i.e. it has a real `prUrl` in `results`):
+   For each artifact actually included in the batch whose branch was
+   successfully pushed (i.e. it has a real `prUrl` in `results`), confirm both
+   that the integration branch contains that work and that the work is on
+   origin:
 
    ```
-   git merge-base --is-ancestor integration/<buildId> backlog/<slug>
+   git merge-base --is-ancestor backlog/<slug> integration/<buildId>
+   git ls-remote --heads origin backlog/<slug>
    ```
 
-   If either check exits `0`, the integration branch's content is safe
-   elsewhere — remove the worktree (`git worktree remove <path>`, run from
+   **Mind the direction of that first check** — it asks whether each artifact
+   branch is contained *in* the integration branch, not the reverse. This was
+   originally written the other way round (`--is-ancestor integration/<buildId>
+   origin/cm-main`), which can never exit `0`: `integration/<buildId>` is by
+   construction a merge commit *ahead of* both `origin/cm-main` and every
+   `backlog/*` branch, so it is never an ancestor of either. The cleanup below
+   was therefore unreachable, and the first real batch left a 398 MB worktree
+   on disk — across a full drain, several GB of dead checkouts.
+
+   If every included, pushed branch is contained in `integration/<buildId>`
+   and present on origin, then the only commit unique to the integration
+   branch is the throwaway merge itself and every artifact's work is safe on
+   origin — remove the **worktree** (`git worktree remove <path>`, run from
    the main checkout; `--force` is acceptable if leftover untracked build
-   output blocks it, since nothing is being discarded) and delete the branch
-   (`git branch -D integration/<buildId>`). If neither check exits `0` (e.g.
-   step 5's batch-wide failure happened before anything was pushed), **do
-   not delete either** — leave the worktree and branch in place and report
-   the worktree's path and branch name instead, matching step 9's "not on
-   origin" pattern in "One tick", so a human can look before anything is
-   lost.
+   output blocks it, since nothing is being discarded). The worktree is where
+   the ~400 MB lives, so this is the part that matters for disk.
+
+   **Keep the branch.** Do *not* `git branch -D integration/<buildId>` here.
+   The image built from this batch is stamped with that merge commit's SHA,
+   and the branch ref is the only thing keeping the commit reachable — delete
+   it and the commit is eventually garbage-collected, after which
+   `scripts/validate-stack.sh` can never verify `tortoise-cm:<buildId>` again
+   and will report it FOREIGN. A ref costs nothing; a permanently
+   unverifiable image is expensive. It becomes safe to delete once that image
+   is gone or superseded, which is a human's call and not this step's. Note
+   also that `--is-ancestor integration/<buildId> origin/cm-main` will never
+   pass even after the PRs merge — GitHub builds its own merge commit, so this
+   local one never lands on the trunk.
+
+   If any included branch is missing from origin or is not contained in the
+   integration branch (e.g. step 5's batch-wide failure happened before
+   anything was pushed), **remove nothing** — leave the worktree and branch in
+   place and report the worktree's path and branch name instead, matching step
+   9's "not on origin" pattern in "One tick", so a human can look before
+   anything is lost.
 8. Continue the loop as step 11 would have (schedule the next tick) —
    running a batch does not itself end the drain. **Exceptions** (calling
    `ScheduleWakeup` twice in one tick would be a bug, so skip this step if

@@ -252,7 +252,8 @@ const validated = await agent(
    gate script, which brings the stack up and refuses to report success unless
    provenance, image identity, and real liveness all pass:
 
-     TW_SRC_DIR=<worktree> <main-checkout>/scripts/validate-stack.sh \\
+     TW_SRC_DIR=<worktree> GIT_DIR=<the worktree's real gitdir, see below> \\
+       <main-checkout>/scripts/validate-stack.sh \\
        --image ${imageTag} --env-file <main-checkout>/.env --keep-up
 
    where <main-checkout> is the repository root of the ORIGINAL session
@@ -274,16 +275,53 @@ const validated = await agent(
    runs from the main checkout, which is where docker-compose.yml and .env live,
    so only the git comparison moves.
 
+   GIT_DIR is NOT optional either, and unlike TW_SRC_DIR this one is not a
+   theory -- it is the failure that actually happened on the first real batch,
+   2026-08-16. A worktree's ".git" is a FILE, not a directory, holding one line
+   like "gitdir: C:/Coding/tortoise-wow/tortoise-wow/.git/worktrees/<name>".
+   That is a WINDOWS path, and git running under WSL cannot resolve it, so the
+   gate's provenance step dies with "fatal: not a git repository" and gate 1
+   reports:
+
+     VALIDATE-STACK: FAIL FOREIGN -- revision <sha> is not a commit in this repository
+
+   That FOREIGN is FALSE. The revision is the worktree's own HEAD and the exact
+   commit the image was built from. Do not go looking for a real provenance
+   problem, and do not rebuild. Fix it instead: read <worktree>/.git, rewrite
+   the "C:/..." path it names into its "/mnt/c/..." form, and export that as
+   GIT_DIR alongside TW_SRC_DIR. The commondir recorded inside it is the
+   relative "../..", which resolves correctly once GIT_DIR itself does. With
+   both set, gate 1 provenance, gate 2 image identity and gate 3 liveness all
+   pass.
+
    Its last stdout line is "VALIDATE-STACK: PASS" or
    "VALIDATE-STACK: FAIL <reason>". Report that line verbatim in liveness.
    If it is FAIL, set dockerReady false and do not attempt any per-artifact
    check -- an unverified server cannot confirm anything, and a check that
    "passed" against a foreign or drifted image is worse than no check at all.
 
+   Report that line accurately in either direction, because the PR phase is
+   gated on it: a FAIL stops this batch outright and nothing gets pushed, while
+   a PASS you did not actually observe would ship unverified work as a
+   ready-to-merge pull request. Exhaust the GIT_DIR fix above before you accept
+   a FOREIGN failure as real.
+
    Then, for each artifact below, attempt only what its inGameCheck says is
    confirmable from logs or console output (not everything is -- most checks
    here will legitimately be "not scriptable, needs a human" and that's
-   expected, say so plainly rather than guessing at a result):
+   expected, say so plainly rather than guessing at a result).
+
+   RUN THOSE CHECKS AGAINST THE INTEGRATION WORKTREE, not against whatever path
+   the checklist names. Each inGameCheck was written by an agent working inside
+   its own worktree, and they routinely hardcode the MAIN checkout path -- e.g.
+   "cd /mnt/c/Coding/tortoise-wow/tortoise-wow && bash tests/...". The main
+   checkout sits on an unrelated branch and does NOT contain this batch's
+   changes, so those commands fail with "No such file or directory", which
+   looks exactly like a broken implementation and is not one. Substitute the
+   integration worktree's path for the repo root in every such command: that
+   tree holds the merged batch and is the one the image was built from. If a
+   check still fails after that substitution, THAT is a real result worth
+   reporting:
 
    ${inGameChecklist}
 
@@ -303,6 +341,28 @@ const validated = await agent(
 
 if (!validated) {
   return { success: false, reason: 'validate phase did not return a result' }
+}
+
+// A failed gate means the image was never verified -- so do not push branches
+// or open PRs off it. Previously the only check here was the null check above,
+// so a "VALIDATE-STACK: FAIL" still fell through to the PR phase and shipped
+// pull requests whose "In-game validation" section quoted a validation that had
+// failed, while the workflow returned success: true. Unattended, that is the
+// worst possible outcome: unverified work merged-ready with a note nobody reads.
+//
+// This is a BATCH-WIDE failure, not a per-artifact one -- nothing in the batch
+// is provably broken on its own, the build merely isn't trusted. backlog-drain
+// leaves every artifact at status: implemented and stops the loop, which is the
+// designed response (see its "Running a batch" step 5).
+const livenessText = typeof validated.liveness === 'string' ? validated.liveness : ''
+const gatePassed = /VALIDATE-STACK:\s*PASS/.test(livenessText) && !/VALIDATE-STACK:\s*FAIL/.test(livenessText)
+if (validated.dockerReady !== true || !gatePassed) {
+  return {
+    success: false,
+    reason: `stack validation did not pass for build ${imageTag} -- nothing was pushed and no PR was opened. `
+      + `dockerReady=${describe(validated.dockerReady)}, liveness=${describe(validated.liveness)}. `
+      + `If liveness says FOREIGN, check GIT_DIR was exported alongside TW_SRC_DIR before concluding the image is bad.`,
+  }
 }
 
 phase('PR')

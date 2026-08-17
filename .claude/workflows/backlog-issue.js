@@ -210,6 +210,17 @@ const implemented = await agent(
       longer argument (bash -lc 'cd /mnt/c/... && ...') is NOT rewritten, which
       is why that form works and the bare one does not.
 
+   One more Windows/WSL trap, and it will bite any git command you run from
+   WSL inside this worktree: a worktree's ".git" is a FILE, not a directory,
+   holding one line like
+   "gitdir: C:/Coding/tortoise-wow/tortoise-wow/.git/worktrees/<name>". That is
+   a WINDOWS path, which git under WSL cannot resolve, so git there fails with
+   "fatal: not a git repository" even though the worktree is perfectly valid.
+   Do not conclude your checkout is broken. Either run git from the Windows
+   side (PowerShell or Git Bash, both fine), or export GIT_DIR with that same
+   path rewritten into its "/mnt/c/..." form. This cost the first batch run a
+   false provenance failure before it was diagnosed.
+
    One trap worth knowing when you do query the database: wsg_mysql sends
    stderr to /dev/null, so a query that fails returns silence rather than an
    error, and reads exactly like "no rows matched". If a query unexpectedly
