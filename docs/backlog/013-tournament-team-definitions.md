@@ -1,5 +1,5 @@
 ---
-status: implemented
+status: done
 risk: low
 area: tournament/teams
 depends-on:
@@ -92,3 +92,5 @@ MANUAL, and genuinely optional — only if steps 4-5 cannot be run:
 6. Log in as a GM, `.go creature` is not needed; just `.lookup player Wsgaone`, then target it and confirm the tooltip reads Human Warrior, and repeat for `Wsghtwo` reading Tauren Druid. This is the eyeball version of step 5 and adds nothing if the SQL ran.
 
 No log line should change as a result of this branch. If a rebuilt image or the mangosd log differs in any way after merging this, that is itself the finding — `config/` and `tests/` are `.dockerignore`d and no CMakeLists references either path, so the compiled binary must be identical.
+
+**Result:** PR opened at https://github.com/ChrisMiho/tortoise-wow/pull/22, build tortoise-cm:20260816-1.
