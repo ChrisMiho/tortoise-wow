@@ -747,6 +747,16 @@ ChatCommand * ChatHandler::getCommandTable()
         { nullptr,             0,                        false, nullptr,                                     "", nullptr}
     };
 
+    // AllowConsole = true on every entry, and on the parent below. That is the
+    // whole point of this table: bgCommandTable above is false throughout, which
+    // is precisely why no script can drive a battleground today.
+    static ChatCommand tournamentCommandTable[] =
+    {
+        { "status",            SEC_ADMINISTRATOR,           true,  &ChatHandler::HandleTournamentStatusCommand, "", nullptr},
+        { "create",            SEC_ADMINISTRATOR,           true,  &ChatHandler::HandleTournamentCreateCommand, "", nullptr},
+        { nullptr,             0,                        false, nullptr,                                     "", nullptr}
+    };
+
     static ChatCommand anticheatClientCommandTable[] =
     {
         { "find",           SEC_ADMINISTRATOR,     true,  &ChatHandler::HandleClientSearchCommand,        "", nullptr },
@@ -860,6 +870,7 @@ ChatCommand * ChatHandler::getCommandTable()
         { "service",        SEC_ADMINISTRATOR,   true,  nullptr,                                        "", serviceCommandTable  },
         { "worldstate",     SEC_ADMINISTRATOR,   false, nullptr,                                        "", worldStateCommandTable},
         { "bg",             SEC_ADMINISTRATOR,   false, nullptr,                                        "", bgCommandTable},
+        { "tournament",     SEC_ADMINISTRATOR,   true,  nullptr,                                        "", tournamentCommandTable},
         { "debug",          SEC_DEVELOPER,       false, nullptr,                                        "", debugCommandTable},
         { "wareffort",      SEC_DEVELOPER,       true, nullptr,                                         "", warEffortCommandTable},
         { "sus",            SEC_DEVELOPER,       false, nullptr,                                        "", suspiciousCommandTable},
