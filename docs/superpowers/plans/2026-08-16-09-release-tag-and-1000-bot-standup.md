@@ -397,8 +397,8 @@ until prov_world_ready; do sleep 5; done
 log "world is up"
 
 # --- 3. trace while it ramps ----------------------------------------------
-# Written continuously to disk: this host reboots itself overnight for Windows
-# Update, and a trace held in memory until the end would be lost entirely.
+# Written continuously to disk: a long ramp will sometimes be interrupted, and a
+# trace held in memory until the end would be lost entirely.
 #
 # rss-trace.sh takes NO command-line flags -- it is configured entirely by
 # TW_RSS_TRACE / TW_RSS_INTERVAL / TW_STACK_ROOT. Passing --out to it does not

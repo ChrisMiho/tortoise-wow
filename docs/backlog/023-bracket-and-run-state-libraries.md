@@ -12,8 +12,9 @@ remembers what already happened. Two properties make this harder than a generic
 bracket. First, **every match must be Alliance vs Horde**: `SetBGTeam` controls
 scoring and spawn side but not hostility (`Unit::IsHostileTo` resolves through
 faction templates, `Unit.cpp:5189`), so a same-faction match is twenty bots
-refusing to fight. Second, **this host reboots itself overnight for Windows
-Update**, so a run that only persists its result at the end loses the whole night.
+refusing to fight. Second, **a tournament run is hours long and interruptible** —
+a crash, a power cut or an operator stopping it — so a run that only persists its
+result at the end loses the whole night instead of one match.
 
 **Suspected cause / area:** Implements
 `docs/superpowers/plans/2026-08-16-04-bracket-engine.md` Tasks 1, 2 and Task 5

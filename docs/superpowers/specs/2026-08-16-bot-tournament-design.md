@@ -182,9 +182,10 @@ server, verified, with sources.
 
 **Never `docker compose down -v`.** `tortoise-wow-v2_dbdata` is the entire world.
 
-**Overnight runs on this host die to Windows Update** (see the operator's memory
-note). Anything long-running writes results to disk incrementally so a partial run
-still yields evidence.
+**Anything long-running writes results to disk incrementally** so a partial run
+still yields evidence. A tournament run is hours long and can be ended by a crash,
+a power cut, or an operator stopping it — none of which are worth losing a night's
+matches to.
 
 ---
 

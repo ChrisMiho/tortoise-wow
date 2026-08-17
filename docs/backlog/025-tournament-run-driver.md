@@ -9,9 +9,10 @@ depends-on: 023-bracket-and-run-state-libraries.md
 
 **Problem:** One match can be run, but a tournament is a loop over pairings with a
 result recorded after each, and there is no such loop. The property that actually
-matters is resume: **this host reboots itself overnight for Windows Update**, and
-a driver that only writes state at the end turns a reboot into the loss of the
-entire night's matches instead of one match.
+matters is resume: **a multi-hour run will eventually be interrupted** — a crash, a
+power cut, a stuck match, an operator stopping it — and a driver that only writes
+state at the end turns any of those into the loss of the entire night's matches
+instead of one match.
 
 **Suspected cause / area:** Implements
 `docs/superpowers/plans/2026-08-16-04-bracket-engine.md` Task 4 and Task 5 Step 5.

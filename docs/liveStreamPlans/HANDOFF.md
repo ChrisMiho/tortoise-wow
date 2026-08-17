@@ -167,10 +167,10 @@ back**, rather than ones that will be marked `blocked` after wasting a tick.
 - **A backgrounded process does not survive `wsl -e bash -lc '...'`**; `nohup` and
   `setsid` do not save it. Anything long-running must come from an interactive WSL
   shell or a supervisor that holds the invocation open.
-- **This host reboots itself overnight for Windows Update.** Long-running steps
-  must write results to disk as they go. A drain tick interrupted mid-artifact
-  leaves it at `status: in-progress`, which needs a human reset — it is never
-  retried automatically.
+- **Long-running steps must write results to disk as they go**, so an interruption
+  costs one unit of work rather than the whole run. A drain tick interrupted
+  mid-artifact leaves it at `status: in-progress`, which needs a human reset — it
+  is never retried automatically.
 
 ### One piece of evidence is on an unpushed branch
 
