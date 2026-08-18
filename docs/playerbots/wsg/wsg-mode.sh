@@ -14,6 +14,17 @@ source "$SCRIPT_DIR/lib/wsg-bots-common.sh"
 SNAP="${WSG_SERVER_ROOT}/.wsg-mode-snapshot.json"
 AICONF="${WSG_SERVER_ROOT}/etc/aiplayerbot.conf"
 MGCONF="${WSG_SERVER_ROOT}/etc/mangosd.conf"
+
+# The SHIPPED defaults, read from the source tree rather than hardcoded here.
+# Only `off --profile alive-world` uses them — the fallback for when no snapshot
+# exists. They were literals, and they went stale: the compiled pool default moved
+# from 200 to 1000 (aiplayerbot.conf.dist.in:57-58) and DisableActivityPriorities
+# from 0 to 1, so the "documented alive-world profile" quietly restored a world a
+# fifth of its intended size. Reading the .dist.in means the next such change lands
+# here for free. SCRIPT_DIR is docs/playerbots/wsg, so the repo root is three up.
+REPO_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
+DIST_AICONF="${WSG_DIST_AICONF:-$REPO_ROOT/src/modules/PlayerBots/playerbot/aiplayerbot.conf.dist.in}"
+DIST_MGCONF="${WSG_DIST_MGCONF:-$REPO_ROOT/src/mangosd/mangosd.conf.dist.in}"
 BAK="tw_world.battleground_template_bak_wsg"
 GM_ACCOUNT="${WSG_GM_ACCOUNT:-504}"
 RESTART=1
@@ -24,19 +35,46 @@ RESTART=1
 # sentinel and restored by re-commenting.
 ABSENT="<absent>"
 
-usage() { echo "usage: $0 on|off|status [--no-restart] [--profile alive-world] [--force]" >&2; exit 2; }
+usage() { echo "usage: $0 on|off|status [--no-restart] [--tournament] [--profile alive-world] [--force]" >&2; exit 2; }
 
 VERB="${1:-}"; shift || true
-PROFILE=""; FORCE=0
+PROFILE=""; FORCE=0; TOURNAMENT=0
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --no-restart) RESTART=0; shift ;;
     --restart)    RESTART=1; shift ;;
     --profile)    PROFILE="$2"; shift 2 ;;
+    --tournament) TOURNAMENT=1; shift ;;
     --force)      FORCE=1; shift ;;
     *) usage ;;
   esac
 done
+
+if [[ "$TOURNAMENT" -eq 1 && "$VERB" != "on" ]]; then
+  echo "ERROR: --tournament only applies to '$0 on'." >&2
+  exit 2
+fi
+
+# Random-bot pool for the match session. `on` shrinks it because bot AI is
+# single-core: every random bot thinking is time the twenty bots in the match do
+# not get. 40 is the WSG-match value that predates the tournament work.
+#
+# --tournament takes it to ZERO, which is the tournament operating decision: only
+# the 20 bots playing the current match are online, plus a GM spectator. Zero is a
+# legal value for this build, not a special case — UpdateAIInternal draws the
+# target from urand(min,max) and then only logs bots in while
+# `availableBotCount < maxAllowedBotCount`, so 0 simply never refills
+# (RandomPlayerbotMgr.cpp:671-703). Nothing logs an already-online bot out for
+# exceeding the target either; the only logout lever is RandomBotTimedLogout,
+# which this profile pins to 0 (RandomPlayerbotMgr.cpp:2316).
+#
+# `rndbot add <name>` is unaffected by the pool size: AddRandomBot() checks the
+# random-account list and the stale-login event and never reads min/maxRandomBots
+# (RandomPlayerbotMgr.cpp:2232-2291), which is what lets roster.sh log the twenty
+# tournament characters in against an empty pool. Verified live 2026-08-18 against
+# tortoise-cm:20260818-5 with the pool at 0/0.
+POOL_SIZE=40
+[[ "$TOURNAMENT" -eq 1 ]] && POOL_SIZE=0
 
 conf_get() { grep -E "^[[:space:]]*${2//./\\.}[[:space:]]*=" "$1" 2>/dev/null | tail -1 | sed 's/.*=[[:space:]]*//' | tr -d '\r'; }
 
@@ -47,6 +85,15 @@ conf_get_opt() {
   else
     printf '%s' "$ABSENT"
   fi
+}
+
+# The value a key ships with, for the no-snapshot fallback. The literal is a last
+# resort for when the source tree is not next to the script (this file also gets
+# copied onto the server host), and for keys the .dist.in ships commented out.
+dist_default() {
+  local conf="$1" key="$2" fallback="$3" v=""
+  [[ -r "$conf" ]] && v="$(conf_get "$conf" "$key" || true)"
+  if [[ -n "$v" ]]; then printf '%s' "$v"; else printf '%s' "$fallback"; fi
 }
 
 # Restore a key to a snapshotted value, re-commenting it when it was absent.
@@ -107,8 +154,8 @@ JSON
     wsg_mysql "UPDATE tw_world.battleground_template SET min_players_per_team = 10 WHERE id = 2;"
     wsg_mysql "UPDATE tw_logon.account SET rank=4 WHERE id=${GM_ACCOUNT};"
 
-    wsg_ensure_conf_key "$AICONF" AiPlayerbot.MinRandomBots 40 >/dev/null
-    wsg_ensure_conf_key "$AICONF" AiPlayerbot.MaxRandomBots 40 >/dev/null
+    wsg_ensure_conf_key "$AICONF" AiPlayerbot.MinRandomBots "$POOL_SIZE" >/dev/null
+    wsg_ensure_conf_key "$AICONF" AiPlayerbot.MaxRandomBots "$POOL_SIZE" >/dev/null
     wsg_ensure_conf_key "$AICONF" AiPlayerbot.RandomBotJoinBG 1 >/dev/null
     wsg_ensure_conf_key "$AICONF" AiPlayerbot.RandomBotAutoJoinBG 0 >/dev/null
     wsg_ensure_conf_key "$AICONF" AiPlayerbot.DisableActivityPriorities 1 >/dev/null
@@ -126,11 +173,22 @@ JSON
       "-grind,-travel,-rpg,-wander,-tfish,+custom::say" >/dev/null
     wsg_ensure_conf_key "$AICONF" AiPlayerbot.AutoDoQuests 0 >/dev/null
 
-    echo "WSG match mode ON. Recommended before large world-DB changes: Backup-TurtleDatabase -IncludeWorld"
+    if [[ "$TOURNAMENT" -eq 1 ]]; then
+      echo "WSG match mode ON (tournament profile: random pool 0/0 — nothing but the roster comes online)."
+    else
+      echo "WSG match mode ON (random pool ${POOL_SIZE}/${POOL_SIZE})."
+    fi
+    echo "Recommended before large world-DB changes: Backup-TurtleDatabase -IncludeWorld"
     if [[ "$RESTART" -eq 1 ]]; then
       docker restart tcm-mangosd
       wsg_wait_world_ready || exit 1
-      if [[ "${WSG_SKIP_ROSTER:-0}" != "1" ]]; then
+      # --tournament skips the WSG demo roster on purpose. Those characters are not
+      # the tournament roster — scripts/tournament/roster.sh owns that — and every
+      # one of them online is a character match-run.sh's population gate will count
+      # and refuse to start on.
+      if [[ "$TOURNAMENT" -eq 1 ]]; then
+        echo "tournament profile: skipping wsg-roster.sh (roster.sh owns the tournament roster)"
+      elif [[ "${WSG_SKIP_ROSTER:-0}" != "1" ]]; then
         bash "$SCRIPT_DIR/wsg-roster.sh" ensure
         # Park the roster in towns. rndbot rpg targets race-appropriate RPG
         # locations rather than the mob grind spots that `teleport`/`grind` pick,
@@ -141,7 +199,7 @@ JSON
       fi
     else
       echo "ACTION REQUIRED: docker restart tcm-mangosd   (battleground_template is read at boot)"
-      echo "Then: wsg-roster.sh ensure"
+      [[ "$TOURNAMENT" -eq 1 ]] || echo "Then: wsg-roster.sh ensure"
     fi
     ;;
 
@@ -151,11 +209,23 @@ JSON
         echo "mode is already off (no snapshot at $SNAP)"
         exit 0
       fi
-      echo "no snapshot — applying the documented alive-world profile"
-      MinRandomBots=200; MaxRandomBots=200; RandomBotAutoJoinBG=0; RandomBotJoinBG=1
-      DisableActivityPriorities=0; RandomBotTimedLogout=1; PrematureFinishTimer=300000; GmRank=3
-      RandomBotNonCombatStrategies="+grind,+loot,+custom::say,+tfish,+wander,+rpg craft"
+      echo "no snapshot — applying the shipped alive-world profile"
+      MinRandomBots="$(dist_default "$DIST_AICONF" AiPlayerbot.MinRandomBots 1000)"
+      MaxRandomBots="$(dist_default "$DIST_AICONF" AiPlayerbot.MaxRandomBots 1000)"
+      RandomBotAutoJoinBG="$(dist_default "$DIST_AICONF" AiPlayerbot.RandomBotAutoJoinBG 0)"
+      RandomBotJoinBG="$(dist_default "$DIST_AICONF" AiPlayerbot.RandomBotJoinBG 1)"
+      DisableActivityPriorities="$(dist_default "$DIST_AICONF" AiPlayerbot.DisableActivityPriorities 1)"
+      # Ships commented out; the literal is the compiled default
+      # (PlayerbotAIConfig.cpp:254 GetBoolDefault "...RandomBotTimedLogout", true).
+      RandomBotTimedLogout="$(dist_default "$DIST_AICONF" AiPlayerbot.RandomBotTimedLogout 1)"
+      RandomBotNonCombatStrategies="$(dist_default "$DIST_AICONF" \
+        AiPlayerbot.RandomBotNonCombatStrategies "+grind,+loot,+custom::say,+tfish,+wander,+rpg craft")"
+      PrematureFinishTimer="$(dist_default "$DIST_MGCONF" BattleGround.PrematureFinishTimer 300000)"
+      # Ships commented out; ABSENT re-comments it, restoring the compiled default.
       AutoDoQuests="$ABSENT"
+      # Not a conf key — tw_logon.account.rank. 3 = DEVELOPER, the everyday value.
+      GmRank=3
+      echo "  pool ${MinRandomBots}/${MaxRandomBots} (from ${DIST_AICONF})"
     else
       get() { grep -o "\"$1\": *\"[^\"]*\"" "$SNAP" | sed 's/.*: *"//; s/"$//'; }
       MinRandomBots="$(get MinRandomBots)";           MaxRandomBots="$(get MaxRandomBots)"
