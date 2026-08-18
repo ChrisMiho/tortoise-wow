@@ -2261,3 +2261,23 @@ ScalarMin20ManHP = 0.1
 ScalarMin20ManDMG = 0.1
 ScalarMin40ManHP = 0.01
 ScalarMin40ManDMG = 0.01
+
+# Tournament.TelemetryIntervalMs. How often, in milliseconds, to sample every
+# player in a running battleground into bg.log as
+#   TELEMETRY tick instance=.. map=.. t=.. player=.. team=.. x=.. y=.. z=..
+#   hp=.. maxhp=.. alive=.. combat=..
+#
+# A score line says who won; it cannot say whether the bots ever played. These
+# samples answer where each bot went and whether it was ever in combat, so a
+# cautious match can be told apart from twenty bots standing on their spawn
+# points.
+#
+#   0     disables sampling entirely (default). Nothing is looped over and
+#         nothing is written - the sampler costs one config read per live
+#         battleground per world tick and no more.
+#   5000  a reasonable trace density: 20 players x 20 minutes at 5s is 4800
+#         lines, nothing next to bg.log's normal traffic.
+#
+# Only battlegrounds with status IN_PROGRESS are sampled, so the gates-closed
+# period before the start and the leave window after the end emit nothing.
+Tournament.TelemetryIntervalMs = 0

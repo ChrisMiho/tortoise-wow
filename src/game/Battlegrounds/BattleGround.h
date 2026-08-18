@@ -611,6 +611,12 @@ class BattleGround
         bool   m_PrematureCountDown;
         uint32 m_PrematureCountDownTimer;
         uint32 m_EmptyHoldTimer;                            // see SetEmptyHoldTime; 0 on every queue-built instance
+
+        // Telemetry sampling accumulator, see BattleGround::Update. Per-instance
+        // and deliberately NOT static: two live battlegrounds sharing one
+        // accumulator would interleave their samples and neither trace would be
+        // readable.
+        uint32 m_telemetryTimer = 0;
         char const *m_Name;
 
         /* Player lists */

@@ -37,6 +37,7 @@
 #include "Formulas.h"
 #include "GridNotifiersImpl.h"
 #include "Chat.h"
+#include "Config/Config.h"
 
 namespace MaNGOS
 {
@@ -262,6 +263,56 @@ BattleGround::~BattleGround()
 
 void BattleGround::Update(uint32 diff)
 {
+    /*********************************************************/
+    /***                    TELEMETRY                      ***/
+    /*********************************************************/
+    // A score line says who won; it cannot say whether the bots ever played.
+    // This samples every player in a running battleground into bg.log so a
+    // match that ended 0-0 can be told apart from twenty bots standing on
+    // their spawn points.
+    //
+    // Off unless Tournament.TelemetryIntervalMs is set. This runs on every
+    // map-update tick of every live battleground, so a server that is not
+    // running a tournament must pay nothing for it -- the config check comes
+    // first, before the accumulator is even touched.
+    {
+        int32 telemetryInterval = sConfig.GetIntDefault("Tournament.TelemetryIntervalMs", 0);
+        if (telemetryInterval > 0 && GetStatus() == STATUS_IN_PROGRESS)
+        {
+            m_telemetryTimer += diff;
+            if (m_telemetryTimer >= uint32(telemetryInterval))
+            {
+                m_telemetryTimer = 0;
+                uint32 elapsed = GetStartTime() / 1000;
+
+                for (const auto& itr : m_Players)
+                {
+                    // Map-scoped, not sObjectAccessor.FindPlayer: Update()
+                    // runs on this instance map's update worker, concurrently
+                    // with the continent maps. A guid stays in m_Players after
+                    // the player has been teleported off the battleground map
+                    // (and until RemovePlayerAtLeave runs after a logout or
+                    // link drop), and a global lookup would hand back a Player
+                    // another thread now owns and mutates. GetBgMap()->GetPlayer
+                    // cannot escape this thread's objects -- it returns null
+                    // instead, which is the routine case here, not an error.
+                    Player* plr = GetBgMap()->GetPlayer(itr.first);
+                    if (!plr)
+                        continue;
+
+                    sLog.out(LOG_BG,
+                        "TELEMETRY tick instance=%u map=%u t=%u player=%s team=%u "
+                        "x=%.2f y=%.2f z=%.2f hp=%u maxhp=%u alive=%u combat=%u",
+                        GetInstanceID(), GetMapId(), elapsed,
+                        plr->GetName(), uint32(itr.second.PlayerTeam),
+                        plr->GetPositionX(), plr->GetPositionY(), plr->GetPositionZ(),
+                        plr->GetHealth(), plr->GetMaxHealth(),
+                        plr->IsAlive() ? 1u : 0u,
+                        plr->IsInCombat() ? 1u : 0u);
+                }
+            }
+        }
+    }
 
     /*********************************************************/
 /***           BATTLEGROUND ENDING SYSTEM              ***/
