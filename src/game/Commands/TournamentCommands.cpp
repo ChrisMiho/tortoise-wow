@@ -38,6 +38,8 @@
 #include "BattleGroundWS.h"
 
 #include <sstream>
+#include <vector>
+#include <cstdlib>
 
 // How long a created-but-unpopulated instance is held open, and how long an
 // invited player is given to actually land in it. One number for both because
@@ -615,6 +617,269 @@ bool ChatHandler::HandleTournamentResultCommand(char* args)
        << " hordeScore=" << hordeScore
        << " status=" << TournamentStatusName(bg->GetStatus())
        << " elapsed=" << (bg->GetStartTime() / 1000);
+    TournamentEmit(ss.str());
+    return true;
+}
+
+// Splits "<id>[,<id>...]" into ids.
+//
+// Empty tokens -- a trailing comma, a doubled comma, a leading comma -- are
+// skipped silently rather than reported. The gear tier files this is driven from
+// join one field per equipment slot with commas, and a slot with no chosen item
+// leaves that field empty; that means "nothing for this slot", not "item 0", so
+// emitting a failure line for it would make every partial tier look broken.
+//
+// A token that is not a number at all is NOT skipped: strtoul yields 0, which has
+// no prototype, so it comes back out as ok=0 reason=no_such_item. A malformed list
+// is a caller bug worth seeing; an omitted slot is not.
+//
+// The terminator is tested AFTER the flush, which is what makes a trailing comma
+// and a final id without one behave identically, and what stops the walk running
+// off the end of the string.
+static void TournamentParseItemIds(char const* str, std::vector<uint32>& ids)
+{
+    if (!str)
+        return;
+
+    std::string token;
+    for (char const* p = str; ; ++p)
+    {
+        if (*p && *p != ',')
+        {
+            token.push_back(*p);
+            continue;
+        }
+
+        if (!token.empty())
+        {
+            ids.push_back(uint32(strtoul(token.c_str(), nullptr, 10)));
+            token.clear();
+        }
+
+        if (!*p)
+            break;
+    }
+}
+
+bool ChatHandler::HandleTournamentEquipCommand(char* args)
+{
+    char* nameStr = ExtractQuotedOrLiteralArg(&args);
+    char* listStr = nameStr ? ExtractLiteralArg(&args) : nullptr;
+    if (!nameStr || !listStr)
+    {
+        TournamentEmit("equip error=usage");
+        SendSysMessage("Syntax: .tournament equip <playerName> <itemId>[,<itemId>...]");
+        return true;
+    }
+
+    std::string name = nameStr;
+
+    std::vector<uint32> ids;
+    TournamentParseItemIds(listStr, ids);
+    if (ids.empty())
+    {
+        // A list that is nothing but separators. Distinct from `usage` because the
+        // caller did pass an argument -- it built an empty one, which is almost
+        // always a tier file that resolved to no items at all.
+        TournamentEmit("equip error=no_item_ids");
+        return true;
+    }
+
+    // Same reading as `add`: only players in the world can be dressed, and a bot
+    // with a session but no character in world is correctly "not online" here.
+    Player* player = ObjectAccessor::FindPlayerByName(name.c_str());
+    if (!player)
+    {
+        TournamentEmit("equip error=player_not_online(" + name + ")");
+        return true;
+    }
+
+    uint32 equipped = 0;
+    uint32 failed = 0;
+
+    for (uint32 itemId : ids)
+    {
+        int32 slot = -1;
+        uint32 ok = 0;
+        std::string reason;
+
+        // Asked separately from CanEquipNewItem even though that returns
+        // EQUIP_ERR_ITEM_NOT_FOUND for the same case: "this id is not an item" is a
+        // typo in a tier file, while every other InventoryResult is a real item the
+        // bot may not wear. The caller has to tell those apart, so they get
+        // different reasons rather than one numeric code covering both.
+        if (!sObjectMgr.GetItemPrototype(itemId))
+        {
+            reason = "no_such_item";
+        }
+        else
+        {
+            uint16 dest = 0;
+
+            // swap = true, and it is load-bearing. The slot is EXPECTED to hold the
+            // previous tier's item: FindEquipSlot with swap = false refuses any
+            // occupied slot (Player.cpp:10349-10377) and CanEquipItem then returns
+            // EQUIP_ERR_NO_EQUIPMENT_SLOT_AVAILABLE, so re-gearing an already-dressed
+            // bot -- the normal case -- would fail on every slot. With swap = true a
+            // free slot is still preferred and an occupied one only taken as a
+            // fallback, which is also what makes a second ring or trinket land in the
+            // empty slot rather than on top of the first.
+            InventoryResult res = player->CanEquipNewItem(NULL_SLOT, dest, itemId, true);
+            if (res != EQUIP_ERR_OK)
+            {
+                // The numeric code, deliberately: a class mismatch
+                // (EQUIP_ERR_YOU_CAN_NEVER_USE_THAT_ITEM) and a level requirement
+                // (EQUIP_ERR_CANT_EQUIP_LEVEL_I) are both bad *item choices* in a tier
+                // file rather than a broken command, and the caller needs to tell them
+                // apart. The names are in Item.h (enum InventoryResult, Item.h:45)
+                // -- NOT SharedDefines.h, where nothing of the sort is declared.
+                // The two that matter most here: 20 = not equippable by anyone
+                // (a consumable), 10 = never usable by this class.
+                std::ostringstream why;
+                why << "cannot_equip(" << uint32(res) << ")";
+                reason = why.str();
+            }
+            else
+            {
+                slot = int32(dest & 255);
+
+                // The occupant has to go before EquipNewItem, not after.
+                // Player::EquipItem does NOT replace an item already in the destination
+                // slot -- it treats the two as a stack, adds the new count onto the old
+                // item, destroys the new one and returns the OLD item
+                // (Player.cpp:12336-12409). So equipping over a filled slot without this
+                // would report ok=1 and leave the previous tier's item in place. Same
+                // destroy-then-equip the playerbot factory does
+                // (PlayerbotFactory.cpp:3266-3268).
+                if (Item* occupant = player->GetItemByPos(uint8(dest >> 8), uint8(dest & 255)))
+                    player->DestroyItem(occupant->GetBagSlot(), occupant->GetSlot(), true);
+
+                if (player->EquipNewItem(dest, itemId, true))
+                {
+                    ok = 1;
+                    reason = "ok";
+                    ++equipped;
+
+                    // A two-hander in the mainhand leaves the offhand occupied but
+                    // unusable. CanEquipItem already refused the equip unless that
+                    // offhand item could be stored, so this cannot strand it, and it is a
+                    // no-op for anything that is not a two-hander (Player.cpp:21723). The
+                    // buy-item path does the same.
+                    player->AutoUnequipOffhandIfNeed();
+                }
+                else
+                {
+                    // Item::CreateItem returned nothing -- the prototype exists but the
+                    // item could not be built. Distinct from cannot_equip: nothing about
+                    // the bot refused it.
+                    reason = "equip_failed";
+                }
+            }
+        }
+
+        if (!ok)
+            ++failed;
+
+        std::ostringstream ss;
+        ss << "equip player=" << name
+           << " item=" << itemId
+           // -1 rather than 0, because 0 is EQUIPMENT_SLOT_HEAD -- a real answer.
+           // Same convention as the map=-1 in `members`.
+           << " slot=" << slot
+           << " ok=" << ok
+           << " reason=" << reason;
+        TournamentEmit(ss.str());
+    }
+
+    // Before the summary line, so a runner that reads the summary and immediately
+    // logs the bot out cannot race the save. Gear applied less than
+    // PlayerSave.Interval (60 s) ago is otherwise only in memory, and the runner
+    // cycles bots between rounds far faster than that.
+    player->SaveToDB();
+
+    std::ostringstream ss;
+    ss << "equip player=" << name
+       << " equipped=" << equipped
+       << " failed=" << failed;
+    TournamentEmit(ss.str());
+    return true;
+}
+
+bool ChatHandler::HandleTournamentStoreCommand(char* args)
+{
+    char* nameStr = ExtractQuotedOrLiteralArg(&args);
+    uint32 itemId = 0;
+    uint32 count = 0;
+    if (!nameStr || !ExtractUInt32(&args, itemId) || !ExtractUInt32(&args, count))
+    {
+        TournamentEmit("store error=usage");
+        SendSysMessage("Syntax: .tournament store <playerName> <itemId> <count>");
+        return true;
+    }
+
+    std::string name = nameStr;
+
+    // CanStoreNewItem for a zero count answers EQUIP_ERR_OK with an empty
+    // destination, and StoreNewItem then returns nothing -- which would read as
+    // store_failed for what is really a caller mistake.
+    if (!count)
+    {
+        TournamentEmit("store error=bad_count");
+        return true;
+    }
+
+    Player* player = ObjectAccessor::FindPlayerByName(name.c_str());
+    if (!player)
+    {
+        TournamentEmit("store error=player_not_online(" + name + ")");
+        return true;
+    }
+
+    uint32 ok = 0;
+    std::string reason;
+
+    if (!sObjectMgr.GetItemPrototype(itemId))
+    {
+        reason = "no_such_item";
+    }
+    else
+    {
+        // Bags, not equipment. `equip` is the wrong verb for a consumable and is
+        // deliberately not taught to accept one: CanEquipNewItem refuses a potion,
+        // correctly, and a stack of five would have nowhere to go if it did not.
+        ItemPosCountVec dest;
+        InventoryResult res = player->CanStoreNewItem(NULL_BAG, NULL_SLOT, dest, itemId, count);
+        if (res != EQUIP_ERR_OK)
+        {
+            // Usually EQUIP_ERR_INVENTORY_FULL (50, Item.h): bots ship with small
+            // default bags.
+            // Numeric for the same reason as cannot_equip -- a full pack and a
+            // per-character unique limit need different fixes.
+            std::ostringstream why;
+            why << "cannot_store(" << uint32(res) << ")";
+            reason = why.str();
+        }
+        else if (!player->StoreNewItem(dest, itemId, true))
+        {
+            reason = "store_failed";
+        }
+        else
+        {
+            ok = 1;
+            reason = "ok";
+        }
+    }
+
+    // Unconditional, and for the same reason as in `equip`: the runner may log the
+    // bot out well inside PlayerSave.Interval.
+    player->SaveToDB();
+
+    std::ostringstream ss;
+    ss << "store player=" << name
+       << " item=" << itemId
+       << " count=" << count
+       << " ok=" << ok
+       << " reason=" << reason;
     TournamentEmit(ss.str());
     return true;
 }
