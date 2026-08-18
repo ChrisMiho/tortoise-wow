@@ -75,6 +75,25 @@ Notes that are easy to get wrong:
 - `bgTypeId` for Warsong Gulch is **`2`** (`SharedDefines.h:1746`); its map is
   489. `<level>` only selects the bracket — use `60`.
 - `status` skips instance id `0`: that is the template, not a live battleground.
+- **`create` gives you 80 seconds to `add` into the instance.** A battleground
+  with nobody in it and nobody invited is normally deleted by
+  `BattleGround::Update` on the very next map tick, and there is no queue behind a
+  console-created one to invite anyone. `create` therefore arms a grace window
+  (`BattleGround::SetEmptyHoldTime`, 80 s = `INVITE_ACCEPT_WAIT_TIME`); the first
+  successful `add` clears it, because the invited count takes over as the
+  instance's lifetime from then on. Sit on an instance id longer than that and
+  `add` answers `no_such_instance` — correctly, the instance reaped itself.
+- **`add` refuses a player who is already in a battleground queue**
+  (`add error=player_in_bg_queue(<name>)`) or mid-teleport
+  (`add error=player_teleporting(<name>)`), and reports a teleport the core
+  refused as `add error=teleport_failed(<name>)` rather than `sent=1`. Assemble a
+  tournament out of idle bots: `add` has to park its invite in one of the player's
+  three battleground queue slots, and taking a queued player would overwrite a
+  real queue invite.
+- An `add` whose port never lands releases itself after 80 s and writes
+  `[tournament] invite to instance … expired for …` to `bg.log` — no `TOURNAMENT `
+  prefix, so parsers skip it. Without that release the instance and its
+  battleground map would be held for the life of the process.
 - `start` does not call a "start" method. It collapses the countdown with
   `SetStartDelayTime(0)`, because the countdown **is** the start — the same
   mechanism `.bg start` uses.
@@ -178,6 +197,16 @@ port** — it runs in `HandleMoveWorldPortAck`
 but no client behind it. Whether a bot ever sends that acknowledgement, and so
 whether it is ever actually added to the battleground, **is not knowable from
 reading the source.**
+
+`AddPlayer` is also **guarded**: `HandleMoveWorldPortAckOpcode` only calls it if
+`_player->IsInvitedForBattleGroundInstance(_player->GetBattleGroundId())`
+(`src/game/Handlers/MovementHandler.cpp:208`) — the guard that stops someone who
+walked in with `.goname` from joining the match. So `add` records the invite
+(`SetInviteForBattleGroundQueueType`) and takes out the matching
+`IncreaseInvitedCount` before it teleports; without both, outcome 3 in the table
+below is guaranteed no matter what bots do about world ports, which would make the
+measurement meaningless. If you are reading a `count=0` result, first confirm the
+build you measured on contains those two calls in `HandleTournamentAddCommand`.
 
 `add` mirrors that same sequence, which is exactly why the two read commands are
 not redundant:

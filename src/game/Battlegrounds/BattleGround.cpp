@@ -215,6 +215,7 @@ BattleGround::BattleGround()
 
     m_PrematureCountDown = false;
     m_PrematureCountDownTimer = 0;
+    m_EmptyHoldTimer = 0;
 
     m_StartDelayTime = 0;
     m_StartDelayTimes[BG_STARTING_EVENT_FIRST]  = BG_START_DELAY_2M;
@@ -300,7 +301,21 @@ void BattleGround::Update(uint32 diff)
         // ]]
         // BattleGround Template instance cannot be updated, because it would be deleted
         if (!GetInvitedCount(HORDE) && !GetInvitedCount(ALLIANCE))
-            delete this;
+        {
+            // Console-created instances (Commands/TournamentCommands.cpp) are
+            // registered before anyone can be invited into them, so an
+            // unconditional delete here kills them on their first tick. The
+            // countdown is the grace window; it is 0 on every instance the queue
+            // builds, so for those this reads exactly as the plain `delete this`
+            // it replaces.
+            if (m_EmptyHoldTimer > diff)
+                m_EmptyHoldTimer -= diff;
+            else
+            {
+                delete this;
+                return;
+            }
+        }
         // update queue to avoid bg remaining indefinitely until player logs back in if he logs out after it pops
         else if (GetStatus() <= STATUS_WAIT_JOIN && (GetBgMap()->GetCreateTime() + 2 * MINUTE) < time(nullptr))
             sBattleGroundMgr.ScheduleQueueUpdate(BattleGroundMgr::BGQueueTypeId(GetTypeID()), GetTypeID(), GetBracketId());

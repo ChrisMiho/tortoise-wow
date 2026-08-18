@@ -70,6 +70,30 @@ declarations and registrations.
 
 **Notes:**
 
+- **Amendment, made during implementation.** The `add` criterion above
+  (`SetBattleGroundId`, `SetBGTeam`, `SendToBattleGround`, nothing else) is not
+  sufficient, and code review caught it. Three calls had to be added, and the
+  criterion should be read as including them:
+  - `bg->IncreaseInvitedCount(team)` — the instance's lifetime. A registered
+    instance with no players and nobody invited is `delete this`'d by
+    `BattleGround::Update`, so without it the instance dies while the player is
+    still in flight. It is also half of a pair: `RemovePlayerAtLeave` calls
+    `DecreaseInvitedCount` unconditionally on a `uint32`, so an unpaired leave
+    wrapped the counter to ~4.29e9 and leaked the instance and its map forever.
+  - `player->SetInviteForBattleGroundQueueType(...)`, behind a claimed
+    `AddBattleGroundQueueId` slot — `HandleMoveWorldPortAckOpcode` only calls
+    `bg->AddPlayer` when `IsInvitedForBattleGroundInstance` holds
+    (`MovementHandler.cpp:208`), so without it `members` could never report the
+    player no matter what bots do about world ports.
+  - `bg->SetEmptyHoldTime(...)` in `create`, plus the grace window it needs in
+    `BattleGround::Update` — the same empty-instance delete meant the id `create`
+    printed was already dangling by the time `add` could be typed, so the live
+    verification below could never have passed. The window is a countdown, zero on
+    every queue-built instance, so the queue path is unchanged.
+
+  Consequent new `add` error reasons: `player_in_bg_queue`, `player_teleporting`,
+  `teleport_failed`, `no_free_queue_slot`. All documented in
+  `docs/playerbots/TOURNAMENT-CONTROL-PLANE.md`.
 - **Do not attempt a Docker build here** (~9.5 min, no incremental build). The
   `backlog-batch` pass compiles this branch; the criteria above are structural on
   purpose.
