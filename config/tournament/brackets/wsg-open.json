@@ -1,0 +1,9 @@
+{
+  "id": "wsg-open",
+  "displayName": "WSG Open",
+  "battleground": "WS",
+  "bgTypeId": 2,
+  "level": 60,
+  "allianceLadder": ["stormwind-sentinels", "ironforge-anvils"],
+  "hordeLadder":    ["orgrimmar-warsong",   "thunderbluff-braves"]
+}

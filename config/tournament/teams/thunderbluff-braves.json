@@ -1,0 +1,19 @@
+{
+  "id": "thunderbluff-braves",
+  "displayName": "Thunderbluff Braves",
+  "faction": "H",
+  "namePrefix": "Wsgi",
+  "gearTier": "base",
+  "roster": [
+    { "slot": "one",   "class": "warrior", "race": "Tauren", "role": "tank"   },
+    { "slot": "two",   "class": "druid",   "race": "Tauren", "role": "tank"   },
+    { "slot": "three", "class": "priest",  "race": "Troll",  "role": "healer" },
+    { "slot": "four",  "class": "shaman",  "race": "Orc",    "role": "healer" },
+    { "slot": "five",  "class": "mage",    "race": "Undead", "role": "dps"    },
+    { "slot": "six",   "class": "warlock", "race": "Undead", "role": "dps"    },
+    { "slot": "seven", "class": "hunter",  "race": "Orc",    "role": "dps"    },
+    { "slot": "eight", "class": "rogue",   "race": "Troll",  "role": "dps"    },
+    { "slot": "nine",  "class": "warrior", "race": "Orc",    "role": "dps"    },
+    { "slot": "ten",   "class": "shaman",  "race": "Tauren", "role": "dps"    }
+  ]
+}
