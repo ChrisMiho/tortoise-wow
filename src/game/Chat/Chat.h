@@ -287,6 +287,8 @@ class ChatHandler
         bool HandleTournamentResultCommand(char* args);
         bool HandleTournamentEquipCommand(char* args);
         bool HandleTournamentStoreCommand(char* args);
+        bool HandleTournamentHealCommand(char* args);
+        bool HandleTournamentKillCommand(char* args);
         // Other
         bool HandleFreezeCommand(char *args);
         bool HandleUnfreezeCommand(char *args);
