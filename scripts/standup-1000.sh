@@ -20,10 +20,12 @@
 # chasing, not a new normal.
 #
 # ORDER MATTERS, and it is the point of the script: validate provenance BEFORE
-# standing anything up, set the pool, start the trace and PROVE IT IS ALIVE,
-# wait for the count, then SEPARATELY hold for a plateau, then gate. Reaching
-# the count is not reaching a plateau — bot inventory and talent construction
-# continue well past login, so RSS is still climbing when the count crosses.
+# standing anything up, set the pool, start the trace and PROVE IT IS ALIVE —
+# and KEEP proving it, on every pass of both waits, because everything after
+# this reads the trace's tail and a frozen tail reads as a plateau — wait for
+# the count, then SEPARATELY hold for a plateau, then gate. Reaching the count
+# is not reaching a plateau — bot inventory and talent construction continue
+# well past login, so RSS is still climbing when the count crosses.
 #
 # Exactly one STANDUP line is printed, on every exit path, and exit 0 happens
 # only on PASS.
@@ -188,12 +190,63 @@ if ! kill -0 "$TRACE_PID" 2>/dev/null || [ ! -s "$TW_RSS_TRACE" ]; then
 fi
 log "rss-trace running (pid $TRACE_PID) -> $TW_RSS_TRACE"
 
+# ...and re-verified on every pass of both long waits below. The check above
+# only proves the sampler STARTED. Nothing downstream knows how old the trace
+# is: rss-plateau.sh reads a window of the tail with no recency test, so a
+# sampler that dies mid-ramp leaves 20 identical rows, which read as 0% drift —
+# a PLATEAU — and the gate then measures a stale rss_kb from minutes or hours
+# earlier. That is a silent PASS off dead data, and the likeliest thing to kill
+# the sampler is the very memory pressure this run exists to detect.
+#
+# Two failure modes, so two checks: the sampler exiting (kill -0), and the
+# sampler alive but wedged in a docker exec that never returns, which leaves the
+# trace just as frozen (file mtime). The staleness ceiling is 10 sampling
+# intervals with a 300 s floor — loose enough that a slow docker exec under load
+# is not mistaken for death, tight enough that it costs one loop iteration
+# rather than the remaining 90 minutes.
+TRACE_STALE_S=$(( TW_RSS_INTERVAL * 10 ))
+[ "$TRACE_STALE_S" -ge 300 ] || TRACE_STALE_S=300
+
+# Echoes a reason and returns 0 when the sampler can no longer be trusted.
+trace_dead_reason() {
+  local mtime now age
+  if ! kill -0 "$TRACE_PID" 2>/dev/null; then
+    echo "trace_sampler_died"; return 0
+  fi
+  mtime="$(stat -c %Y "$TW_RSS_TRACE" 2>/dev/null)" || mtime=""
+  if ! [[ "$mtime" =~ ^[0-9]+$ ]]; then
+    echo "trace_file_unreadable"; return 0
+  fi
+  now="$(date +%s)"
+  age=$(( now - mtime ))
+  if [ "$age" -gt "$TRACE_STALE_S" ]; then
+    echo "trace_stale_${age}s"; return 0
+  fi
+  return 1
+}
+
+check_trace() {
+  local why
+  if why="$(trace_dead_reason)"; then
+    log "FAIL: the RSS sampler has stopped producing samples ($why)"
+    log "      Every gate below reads the tail of $TW_RSS_TRACE. A frozen tail"
+    log "      reads as a plateau and would gate on a stale RSS, so this fails"
+    log "      here rather than passing on data of unknown age."
+    if [ -s "$OUT/rss-trace.err" ]; then
+      log "      rss-trace said:"
+      sed 's/^/      /' "$OUT/rss-trace.err" | tee -a "$LOG"
+    fi
+    finish FAIL "$why"
+  fi
+}
+
 # --- 4. wait for the COUNT, then separately for the PLATEAU ----------------
 # Two different things. The count crossing is the START of the measurement, not
 # the end of it.
 log "waiting for $TARGET bots online"
 deadline=$(( $(date +%s) + 5400 ))
 while :; do
+  check_trace
   ONLINE="$(prov_online_count)"
   [[ "$ONLINE" =~ ^[0-9]+$ ]] || ONLINE=0
   log "online=$ONLINE/$TARGET"
@@ -216,6 +269,9 @@ log "count reached; now holding for an RSS plateau"
 # for one.
 deadline=$(( $(date +%s) + 3600 ))
 while :; do
+  # Before rss-plateau.sh runs, not after: its verdict is only as trustworthy as
+  # the freshness of the rows it is about to read.
+  check_trace
   "$HERE/rss-plateau.sh" 20 > "$OUT/plateau.last" 2>&1
   rc=$?
   tee -a "$LOG" < "$OUT/plateau.last"
@@ -228,6 +284,11 @@ while :; do
 done
 
 # --- 5. gates --------------------------------------------------------------
+# Once more before anything is measured. Both loops above can leave by a path
+# that does not re-check (the count crossing, the 60-minute plateau timeout),
+# and the number this run is judged on is read from the trace right here.
+check_trace
+
 # The RSS column is located by READING THE TRACE'S HEADER ROW. rss-trace.sh
 # writes one; a hardcoded field position would silently read the wrong column
 # the day that schema gains one.
