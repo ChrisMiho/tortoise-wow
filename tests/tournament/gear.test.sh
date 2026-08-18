@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# Unit tests for scripts/tournament/gear-audit.sh. No server, no database: the
-# docker CLI is stubbed on PATH, so every row the audit sees is written here.
+# Unit tests for scripts/tournament/gear-audit.sh and scripts/tournament/lib/gear.sh.
+# No server, no database: the docker CLI is stubbed on PATH, so every row the
+# audit sees is written here, and the tier library reads a committed fixture.
 #
 # Run from WSL, not Git Bash: jq is not on Git Bash's PATH on this host and
 # require_cmd is a hard exit, not a skip.
@@ -184,6 +185,55 @@ case "$bad" in
 esac
 assert_eq "refused, exit 2" "$bad" \
   "a team that fails team_validate is refused with exit 2, not measured"
+
+# --- the gear tier library --------------------------------------------------
+#
+# GEAR_DIR points at tests/fixtures/gear, NOT config/tournament/gear. That
+# directory is written by gear-generate.sh against a live item_template, so a test
+# that validated it would fail in every checkout where the generator has not been
+# run -- including this one. The fixture is the same format, hand-written, and is
+# the contract this library is actually tested against.
+. "$ROOT/scripts/tournament/lib/gear.sh"
+export GEAR_DIR="$ROOT/tests/fixtures/gear"
+
+assert_exit 0 "the committed warrior-tank fixture validates" -- gear_validate warrior tank
+
+assert_eq "base" "$(gear_tiers warrior tank | head -1)" \
+  "tiers come back ordered by rank, lowest first"
+
+assert_eq "upgrade" "$(gear_next_tier warrior tank base)" \
+  "the tier one rank above base is upgrade"
+
+# The no-op-at-the-top rule, which is the whole reason rank exists: a viewer who
+# paid to upgrade a bot that is already at the top gets nothing, never a silent
+# reset to white.
+assert_eq "" "$(gear_next_tier warrior tank upgrade)" \
+  "there is no tier above the top, and it does not wrap around to base"
+
+assert_contains "$(gear_items warrior tank base)" "mainhand|" \
+  "the base tier arms the bot rather than sending it in bare-handed"
+
+# A tier with a hole is the bug being fixed, not a tier: InitEquipment already
+# produces half-dressed bots on its own (PlayerbotFactory.cpp:2999-3003), and a
+# tier file that reproduces that by hand would pass every other check.
+#
+# Exit status and the message are asserted together on purpose. A validator that
+# names the slot but returns 0 is not a gate, and one that returns 1 without
+# naming the slot leaves an operator diffing 13 lines of JSON by hand.
+TIERTMP="$TMP/gear"
+mkdir -p "$TIERTMP"
+jq 'del(.tiers.base.items.mainhand)' < "$GEAR_DIR/warrior-tank.json" \
+    > "$TIERTMP/warrior-tank.json"
+export GEAR_DIR="$TIERTMP"
+
+holed_rc=0
+holed="$(gear_validate warrior tank 2>&1)" || holed_rc=$?
+case "$holed" in
+    *mainhand*) holed_named="named" ;;
+    *)          holed_named="NOT NAMED" ;;
+esac
+assert_eq "rc=1 mainhand=named" "rc=$holed_rc mainhand=$holed_named" \
+  "a tier with mainhand deleted is rejected, and the message names mainhand"
 
 stub_cleanup "$STUBS"
 rm -rf "$TMP"
