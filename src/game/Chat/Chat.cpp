@@ -763,6 +763,8 @@ ChatCommand * ChatHandler::getCommandTable()
         { "store",             SEC_ADMINISTRATOR,           true,  &ChatHandler::HandleTournamentStoreCommand,  "", nullptr},
         { "heal",              SEC_ADMINISTRATOR,           true,  &ChatHandler::HandleTournamentHealCommand,   "", nullptr},
         { "kill",              SEC_ADMINISTRATOR,           true,  &ChatHandler::HandleTournamentKillCommand,   "", nullptr},
+        { "poi",               SEC_ADMINISTRATOR,           true,  &ChatHandler::HandleTournamentPoiCommand,    "", nullptr},
+        { "camera",            SEC_ADMINISTRATOR,           true,  &ChatHandler::HandleTournamentCameraCommand, "", nullptr},
         { nullptr,             0,                        false, nullptr,                                     "", nullptr}
     };
 
