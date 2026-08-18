@@ -9,8 +9,11 @@ recorded elsewhere in this repo. Where a claim is inference rather than a read, 
 says so and gives it a confidence.
 
 Implements Tasks 1–2 of `docs/superpowers/plans/2026-08-16-07-bg-combat-analysis.md`.
-The measurement half (§4 of that plan) and the scoping of individual fixes are
-artifact 037, which needs a live match.
+**§4 was added later, by artifact 037**, and implements Tasks 3–4 of the same plan: it
+is the measurement half, taken from one live 20-minute match on 2026-08-18, and it
+carries the recommendations and their backlog artifacts. §0–§3 are unchanged from the
+code-reading pass and are dated against commit `80a7100`; where §4 contradicts a
+finding above it, §4 wins and says so.
 
 Unless a path is given, `file:line` references are relative to
 `src/modules/PlayerBots/playerbot/`.
@@ -400,7 +403,8 @@ custom to this server (`WSG-BOT-MATCH.md` §10).
 ### 3.1 What this reading does *not* explain
 
 Stated explicitly so the next reader does not assume these were checked and found
-empty:
+empty. **§4 has since answered the second of these and reframed the first** — read
+§4.2 and §4.3 before acting on anything here.
 
 - **The 2.7:1 Alliance skew is not attributed.** F-02 points the right way, F-06 points
   the wrong way, and F-14 is a confound of unknown size. `wsgPaths` and `wsgRoofJump`
@@ -426,9 +430,230 @@ empty:
 
 ---
 
-## 4. Next
+## 4. Measured — one live WSG match, 2026-08-18
 
-The measurement half of this analysis, and one scoped backlog artifact per actionable
-finding above, are **artifact 037**, which needs a live match. Nothing here should be
-acted on as a fix without a measurement attached — that constraint is why this is a
-document and not a patch.
+Everything above §4 is a code reading. Everything in §4 is a measurement, and every
+number says where it was read from. Artifact 037.
+
+### 4.0 The run
+
+| | |
+|---|---|
+| Run directory | `/home/deck/tournament-runs/037-wsg-2` (`match.log`, `gear.log`, `assemble.log`, `bg-slice.log`, `telemetry.csv`, `report.txt`, `bots-window.log`) |
+| Command | `scripts/tournament/match-run.sh stormwind-sentinels orgrimmar-warsong`, `ASSEMBLE_MODE=direct` |
+| Image running | **`tortoise-cm:20260818-2`** — see the note below |
+| Config | `Tournament.TelemetryIntervalMs = 5000` in `~/tortoise-wow-server-V2/etc/mangosd.conf`, `docker restart tcm-mangosd`; `AiPlayerbot.MinRandomBots`/`MaxRandomBots` set to 0 so the population gate could pass |
+| Started / ended | 2026-08-18 13:12:46Z / 13:32:06Z |
+| Duration | **20m21s** — the full 20-minute cap (`BattleGround.cpp:317-323`) |
+| Result | `[2,101]: winner=2, duration=20m21s` in `bg.log` — a **0-0 draw**; `MATCH ... winner=NONE ... allianceScore=0 hordeScore=0` |
+| Telemetry | 4540 samples, 20 players × 227 samples, `t` = 61 s to 1199 s |
+
+**Which image, and why not the newest.** `Tournament.TelemetryIntervalMs` is read by
+the C++ sampler from artifact 026, so it only exists in a binary built after 026 was
+batched. `docker ps` found the stack down; of the images on this host, 026's commit
+(`41e15e4`) is reachable only from `integration/20260818-2`, **not** from
+`integration/20260818-3`, which `.env`'s `TW_IMAGE` points at. The measurement was
+therefore taken on `tortoise-cm:20260818-2`. That image contains everything up to and
+including 026/027/029 but not the three artifacts batched into `-3`, none of which
+touch bot AI.
+
+**Two caveats, stated up front.**
+
+1. **The gear gate was bypassed.** `gear-audit.sh` reports
+   `stormwind-sentinels complete=5/10 worstMissing=8` and
+   `orgrimmar-warsong complete=6/10 worstMissing=8`, and `gear-apply.sh` cannot close
+   the gaps — the provisional tier files pick items the bots answer with
+   `cannot_equip(8)` / `cannot_equip(17)`. The match was run through a local copy of
+   `match-run.sh` with the gate demoted from `fatal` to a log line. This matters for
+   any claim about who would win a fight. It does **not** touch anything §4 actually
+   concludes, because no fight happened: bare-handed bots still walk.
+2. **No human was in the instance.** That is deliberate — `selectObjective`'s
+   `BgTeamHasRealPlayer` gate (F-14) makes bot behaviour depend on whether a player is
+   present and on which team they joined, so an observed match is not an all-bot match.
+
+### 4.1 The four questions
+
+**Do bots leave their base at all? No. Not one of them moved.**
+
+```
+REPORT players=20 expected=20 entered=20 stuck=20
+MOVEMENT player=Wsgaone   distance=0.0 maxStep=0.0 idleSamples=226 stuck=1
+... identical for all 20 ...
+```
+
+(`scripts/tournament/telemetry-report.sh` over `telemetry.csv`.) Read independently
+out of the CSV, every player has exactly **one distinct `(x, y)`** across all 227 of
+its samples. All 20 entered — assembly is not the problem — and all 20 stood on their
+spawn point for the entire 20 minutes.
+
+One bot, `Wsgaeight`, is `alive=0` for **all 227** of its samples: it was dead before
+the first sample and never released, never ran to its corpse, never resurrected.
+
+**Do the two sides ever occupy the same ground? Never — they stay half a map apart.**
+
+| | x range across the whole match |
+|---|---|
+| Horde (`team=67`) | 943.1 … 950.2 |
+| Alliance (`team=469`) | 1495.0 … 1519.5 |
+
+- Closest Alliance-Horde pair at any sample: **544.8 yd**, at `t=61` (the first sample).
+- Closest any Alliance bot came to the Warsong (Horde) flag at `(916.02, 1434.40)`: **579.5 yd**.
+- Closest any Horde bot came to the Silverwing (Alliance) flag at `(1540.42, 1481.32)`: **590.6 yd**.
+
+Flag positions are the live spawns in `tw_world.gameobject` for map 489, not literals
+from the bot code. Sustained separation of this size is not "fighting badly" — it is a
+different problem, exactly as the artifact anticipated.
+
+**How much of the match is spent in combat? 0.00%.**
+
+`combat=1` appears in **0 of 4540** samples. `alive=1` in 4313 of 4540 (95.0%), and
+every one of the 227 dead samples belongs to `Wsgaeight`.
+
+**Was the flag ever picked up? No.**
+
+`honor.log` holds **zero** 495-honor bursts dated 2026-08-18 — the marker that showed
+the first recorded match was really a 2-0 Horde win (`WSG-BOT-MATCH.md` §6). With the
+closest approach to either flag at ~580 yd, and `atFlag()` engaging only inside
+`VISIBILITY_DISTANCE_TINY` = 25 yd (`BattleGroundTactics.cpp:4431`), no pickup was
+geometrically possible.
+
+### 4.2 Why the bots stand still — from `bots.log`, not from reasoning
+
+`bots-window.log` is `bots.log` sliced to 13:12:46Z–13:32:06Z and filtered to the 20
+`Wsg*` bots: 403,139 lines, **25,476 AI ticks**. The AI is running and the
+battleground strategies are attached — `T:bg active` fires every tick. What it does
+with those ticks:
+
+| line | count |
+|---|---|
+| `PUSH:bg move to objective - 1.000000 (trigger)` | 23,908 |
+| **`A:move to objective - <anything>`** | **0** |
+| `PUSH:bg check flag - 70.000000 (trigger)` | 23,908 |
+| `PUSH:bg check flag - 20.000000 (trigger)` | 23,908 |
+| `A:check flag - PREREQ` / `A:check flag - FAILED` | 23,681 / 23,681 |
+| `PUSH:bg check objective - 10.000000 (trigger)` | 4,370 |
+| `A:check objective - PREREQ` / `A:check objective - FAILED` | 16 / 16 |
+| `A:select objective` / `A:protect fc` / `A:attack fc` / `A:move to start` | 0 / 0 / 0 / 0 |
+| ticks ending `no actions executed` | **25,175 of 25,476 (98.8%)** |
+
+`bg move to objective` is the only action that carries a WSG bot across the field. It
+was queued 23,908 times and **popped zero times**. The tick is spent on `bg check
+flag`, whose action returns `atFlag(...)` == false (`BattleGroundTactics.cpp:2834-2850`)
+and is logged `FAILED`, after which the tick ends.
+
+The relevance ladder that produces this is `BattlegroundStrategy.cpp`:
+
+| trigger | action | relevance | line |
+|---|---|---|---|
+| `bg active` | `check mount state` / **`bg move to objective`** | 2.0 / **1.0** | `:28-30` |
+| `very often` | `bg check objective` | 10.0 | `:32-34` |
+| `bg active` | `bg check flag` | `ACTION_HIGH` = 20.0 (`strategy/Strategy.h:30`) | `:36-38` |
+| `bg active` (`WarsongStrategy`) | `bg check flag` | **70.0** | `:59-61` |
+
+The mover sits at the bottom of the ladder, under a check action at 70 that fails on
+every tick without yielding. This is **F-01's mechanism confirmed and its attribution
+corrected**: the starving action is `bg check flag` at 70, not `bg check objective` at
+10. What is *not* settled is whether `Engine::DoNextAction`'s queue walk is
+*defective* — ending the tick early — or behaving exactly as designed, with a failing
+relevance-70 action legitimately consuming the tick and relevance 1 simply unreachable
+underneath it. The gate phase is the contrast to explain: sliced from the same
+`bots.log` to **13:11:38Z–13:12:34Z**, before `TOURNAMENT start instance=101 ok=1`
+fires (`bg-slice.log`, 13:12:35Z), the same bots tick 1,414 times with **nothing at
+relevance 70 in the queue** — no `PUSH:bg check flag` at all — and execute
+`check values` (relevance 1.0) **188 times OK** and `move to start` **34 times OK**.
+Across the 25,476 match ticks, with `bg check flag` at 70 pushed and failing every
+tick, `A:check values - OK` appears **12** times and `A:move to start` never. Same
+bots, same instance, same relevance table; the variable is the failing relevance-70
+action. That question is
+`docs/backlog/046-wsg-bots-never-execute-bg-move-to-objective.md`, and it wants an
+instrumented build, not more reading.
+
+### 4.3 The flag-carrier lead is **explicitly refuted**
+
+The lead this artifact existed to test — that the three commented-out flag-carrier
+triggers at `BattlegroundStrategy.cpp:44-56` cause the 0-0 draws — is refuted by two
+independent measurements.
+
+1. **Sequence.** A flag-carrier trigger fires on a flag carrier. In the measured match
+   no bot moved, no bot came within 579 yd of a flag, and no flag was picked up. There
+   is no state in which any of those three triggers could have fired, so they cannot
+   be what ended the match 0-0.
+2. **History.** Those triggers were already commented out during the period when this
+   server's bots played WSG properly. `strategy/generic/BattlegroundStrategy.cpp` has
+   not been modified since commit `0af2567`, 2026-05-10. Over that unchanged file,
+   `bg.log` and `honor.log` record:
+
+| date | Horde wins | Alliance wins | draws | 495-honor flag-capture awards |
+|---|---|---|---|---|
+| 2026-08-10 | 6 | 15 | 14 | 184 |
+| 2026-08-11 | 0 | 1 | 1 | 30 |
+| 2026-08-17 | 0 | 0 | 2 | 0 |
+| 2026-08-18 | 0 | 0 | 5 | 0 |
+
+  (`[2,<instance>]: winner=<n>` in `bg.log`, `0`=HORDE `1`=ALLIANCE `2`=draw,
+  `BattleGround.h:187-189`; `Player <name> ... got 495.000000 honor for type 3` in
+  `honor.log`, ten per capture.) Every one of the **22 decisive matches** on this
+  server, and every flag capture ever recorded on it, falls on 2026-08-10/11 — with
+  the triggers commented out the whole time. Every match since 2026-08-17 is a
+  scoreless draw.
+
+The same table refutes a second thing worth stating plainly: **the 2.7:1 Alliance skew
+and the current all-draw regime are not the same phenomenon.** The skew is 15-6 over
+21 decisive matches, all on 2026-08-10; §3.1 was right not to attribute it. Twenty-one
+is still a small sample and a single day's configuration.
+
+What the table *does* point at is a regression between 2026-08-11 and 2026-08-17, in a
+window where the bot AI source did not change but `aiplayerbot.conf` did — that is
+`docs/backlog/047-find-the-playerbot-config-change-that-froze-wsg-bots.md`, and it is
+config-only.
+
+### 4.4 Recommendations, ranked by expected match-quality gain per unit of risk
+
+Ranked deliberately on that ratio, not on gain alone: a change touching shared pathing
+or the engine's relevance queue is higher risk than one re-enabling a trigger or
+deleting a debug line, because relevance interacts globally — raising one action
+starves others, which is precisely how the state measured above was reached.
+
+| # | Recommendation | Expected gain | Risk | Artifact |
+|---|---|---|---|---|
+| 1 | Bisect the `aiplayerbot.conf` deltas across the 2026-08-11 → 2026-08-17 regression window against a real match | **Very high** — plausibly restores a working match outright | **Very low** — config only, no build, revertible by copying a backup back | `docs/backlog/047-find-the-playerbot-config-change-that-froze-wsg-bots.md` |
+| 2 | Establish why `bg move to objective` is never popped, and fix it | **Very high** — nothing else in this list is observable until bots move | **Medium** — the candidate sites are `Engine::DoNextAction` and the relevance table, both global to every bot on the server, not just BG bots | `docs/backlog/046-wsg-bots-never-execute-bg-move-to-objective.md` |
+| 3 | Register `"team flagcarrier near"` so `protectFC()` is reachable at all | Medium — a carrier gets an escort, once carriers exist | Low — one registration; restoring the trigger node itself is a separate, argued decision | `docs/backlog/050-team-flagcarrier-near-trigger-is-never-registered.md` |
+| 4 | Fix `wsgRoofJump`'s dead Alliance `else` and the unused `LOWER` constant (F-02) | Medium — restores the last hop of the Horde attack route, the one defect pointing the same way as the recorded skew | Low — WSG-only, one function, no shared pathing | `docs/backlog/048-wsg-alliance-flag-room-drop-unreachable.md` |
+| 5 | Add the two missing `return true`s in `wsgPaths`'s westbound branch (F-06) | Low-medium — stops Alliance tunnel bots being dragged back to mid-field | Low — two statements inside one `else if` chain | `docs/backlog/049-wsg-westbound-tunnel-move-is-overridden.md` |
+| 6 | Characterise the graveyard route marked `BUGGED`, then fix or actually disable it (F-07) | Medium — it is assigned to ~30% of bots | **Medium-high** — it is shared pathing, and what the bug *is* is written down nowhere; needs measuring before touching | `docs/backlog/053-wsg-graveyard-route-is-marked-bugged-and-still-assigned.md` |
+| 7 | Initialise `vPaths`/`vFlagIds` and guard their dereference (F-10) | None visible today | Very low — and it removes a real crash one config change away | `docs/backlog/052-bgtactics-vpaths-uninitialised-for-blood-ring-and-sv.md` |
+| 8 | Resolve the three `#ifdef MANGOS` PvP triggers — port or delete (F-09) | None today | Very low — no strategy fires them | `docs/backlog/051-pvp-flag-triggers-compiled-out-by-ifdef-mangos.md` |
+| 9 | Delete the debug `bot->Say()` in the AB objective path (F-16) | Cosmetic, but player-visible in Arathi Basin | Lowest in the list — one line, no control flow | `docs/backlog/054-debug-say-left-in-the-arathi-objective-path.md` |
+
+Items 3-9 are all **unobservable in-game until 1 or 2 lands**, and each artifact says so.
+
+### 4.5 Findings that got no artifact, and why
+
+The backlog is work, not a notebook. These stay here:
+
+- **F-04** (`bg attack fc` / bare `bg tactics` have no `Execute` branch) — no strategy
+  fires them; nothing to observe and nothing a user could ask for.
+- **F-05** (`vPaths_WS` is dead in WSG) — a true and important fact about where WSG
+  movement comes from, but the fix is "delete 350 lines of data nobody reads", which
+  is not an improvement to a match.
+- **F-08** (`jump::position bg objective` is `isUseful() == false` in an all-bot match)
+  — no functional loss; it is a constraint on how to measure, and §4.0 already applies
+  it by keeping observers out of the instance.
+- **F-11** (`ChangeStrategy("-buff")` every tick) — the analysis expects no
+  behavioural difference, and the measurement gives no reason to revisit that.
+- **F-12** (`moveToStart()` returns `true` without moving) and **F-13** (`flagTaken()`
+  / `teamFlagTaken()` named backwards) — both are traps for the next reader with no
+  live symptom; both are called out inside the artifacts that touch their code.
+- **F-14** (`BgTeamHasRealPlayer` gate) — deliberate and dated in the source. It is a
+  measurement constraint, not a defect.
+- **F-15** (`botSelectedObjectives` never erased) — AB only, guarded in practice,
+  `low` confidence; it wants an ASan run before it wants a fix.
+
+One thing found *while* measuring, recorded here because it blocks the next
+measurement rather than the bot AI: **`match-run.sh`'s gear gate currently fails every
+match on this host.** `gear-apply.sh` cannot dress 9 of the 20 tournament bots — the
+provisional tier files pick items that come back `cannot_equip(8)` / `cannot_equip(17)`
+— so `gear-audit.sh` never passes and the run aborts before assembly. Anyone repeating
+this measurement will hit it. It belongs to the gear track
+(`docs/backlog/031-gear-tier-armour-weapon-split.md`), not to this analysis.
