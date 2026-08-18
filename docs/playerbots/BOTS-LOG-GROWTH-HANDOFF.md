@@ -10,6 +10,24 @@ Set `AiPlayerbot.BotLogFile = ""` in `etc/aiplayerbot.conf`, restart mangosd, do
 Everything below is verified against the live stack or the WSL-side source unless
 marked HYPOTHESIS.
 
+> **Update 2026-08-18 — the 12 GB figure is historical, the mechanism is not.**
+> `scripts/cap-logs.sh` now installs `/etc/logrotate.turtle.conf` plus a 5-minute
+> `/etc/cron.d/turtle-logrotate`, superseding §5's narrower predecessor (which is
+> why `/etc/logrotate.turtle-bots.conf` is absent on this box). `AiPlayerbot.BotLogFile`
+> is still `bots.log` — §4 was never applied — so the emitter in §2 is unchanged and
+> the growth is real; it is now *rotated* rather than *stopped*.
+>
+> Measured 2026-08-18, stack idle: live `bots.log` 21 MB, `bots.log.1.gz` 39 MB
+> (435 MB uncompressed), `bots.log.2.gz` 37 MB (421 MB uncompressed), whole `logs/`
+> directory 152 MB. Those two generations are five minutes apart, which puts the
+> write rate near **87 MB/min** — roughly 4x §1's 22.6 MB/min, and the live file
+> peaks around **435 MB** between rotations, not the ~163 MB `cap-logs.sh` projects
+> from the older rate.
+>
+> Practical consequence: reading `bots.log` from the start is still not an option,
+> so §9's do-nots stand as written. Use `scripts/tournament/bot-log-capture.sh`,
+> which anchors on a byte offset — see `docs/playerbots/TOURNAMENT-TELEMETRY.md`.
+
 ---
 
 ## 1. The numbers (measured on this box, 2026-08-10)
