@@ -43,6 +43,29 @@ delete its entry from `.results` in `state.json` — the driver will then see it
 unplayed. (The eliminated team does *not* come back on its own; put it back in
 `.survivors` too if that is what you mean.)
 
+### One driver at a time
+
+A run directory takes an exclusive `flock` on `<run-dir>/.lock` before it touches
+`state.json`, and holds it until the process exits. A second invocation on a run
+dir that is still live refuses:
+
+```
+FATAL: another tournament-run.sh is already driving logs/tournament/friday (pid 4711 on TORTOISE since 2026-08-17T23:04:11Z)
+```
+
+That refusal is the point of the lock. "Re-run the same `--run-dir`" is also what
+an operator does when a run merely *looks* stuck, and if the first process is
+alive two drivers would read the same pairing as unplayed, run `match-run.sh`
+over the same twenty bots twice, and interleave their `jq` writes in
+`state.json.tmp` — publishing a corrupt or silently-losing `state.json` and
+costing the night rather than one match.
+
+The kernel drops the lock when the holder exits, however it exits, so a crash or
+a power cut leaves nothing to clean up: just re-run. There is no stale lock to
+delete, and deleting `.lock` by hand does not free anything — it only gives the
+next arrival a different file to lock. If a run is genuinely stuck, kill the
+driver (and the `match-run.sh` it started) and re-invoke.
+
 ## Structure: two mirrored ladders
 
 Every WSG match must be Alliance versus Horde. `SetBGTeam` controls scoring and
@@ -158,6 +181,7 @@ eliminate nobody. Exit status is 0 for a champion, 1 for blocked or failed.
 ```
 logs/tournament/<run>/state.json                          the resumable run state
 logs/tournament/<run>/tournament.log                      the driver's narration and every terminal line
+logs/tournament/<run>/.lock                                the one-driver-at-a-time lock; never deleted, never stale
 logs/tournament/<run>/r<N>-<a>-vs-<h>/match.log           one directory per match: match-run.sh's narration
 logs/tournament/<run>/r<N>-<a>-vs-<h>/roster.log          the logout/login swap for that match
 logs/tournament/<run>/r<N>-<a>-vs-<h>/gear.log            the gear gate's findings

@@ -72,6 +72,46 @@ mkdir -p "$RUN_DIR" || { echo "FATAL: cannot create run dir $RUN_DIR" >&2; exit 
 log() { printf '[%s] %s\n' "$(date -u +%H:%M:%SZ)" "$*" | tee -a "$RUN_DIR/tournament.log"; }
 out() { printf '%s\n' "$*" | tee -a "$RUN_DIR/tournament.log"; }
 
+# --- one driver per run directory --------------------------------------------
+# The resume interface IS "re-run the same --run-dir", so a second driver on a
+# live run dir is not a hypothetical: it is what an operator does when a run
+# looks stuck -- a match that has hung rather than a process that has died. Both
+# processes would then read already_played false for the same pairing, drive
+# match-run.sh over the same twenty bots, and read-modify-write state.json
+# through state_set's fixed state.json.tmp path. Two jq writes interleave in that
+# one temp file and the mv publishes the result: state that is corrupt, or that
+# has silently lost a round's results. That is the exact failure the atomic
+# rename exists to prevent, and it costs the whole night rather than one match.
+#
+# flock, not a pidfile: the kernel releases the lock when the holder exits,
+# however it exits, so a crashed run leaves nothing stale to clean up and there
+# is no is-that-pid-still-ours guesswork. A holder that is stuck but alive still
+# holds the lock, which is precisely the case above. The pid line in the file is
+# for the refusal message only -- nothing decides anything from it.
+LOCK_FILE="$RUN_DIR/.lock"
+command -v flock >/dev/null 2>&1 || { echo "FATAL: flock is not installed (run this from WSL, not Git Bash)" >&2; exit 2; }
+# Opened append, not truncating: the fd is opened before the lock is taken, and
+# > would wipe the current holder's pid line out from under it.
+exec 9>>"$LOCK_FILE" || { echo "FATAL: cannot open lock file $LOCK_FILE" >&2; exit 1; }
+if ! flock -n 9; then
+    holder="$(head -1 "$LOCK_FILE" 2>/dev/null)"
+    echo "FATAL: another tournament-run.sh is already driving $RUN_DIR (${holder:-holder unknown})" >&2
+    echo "       Stop it, or wait for it. Two drivers on one run dir replay the same pairing and corrupt state.json." >&2
+    exit 1
+fi
+# Safe to truncate now: nobody else can be inside the run dir. The lock is held
+# for the life of the process and dropped by the kernel when it exits, so there
+# is no unlock path to get wrong and the file is deliberately never deleted --
+# unlinking it would hand the next arrival a different inode to lock.
+#
+# fd 9 is deliberately NOT closed for the match-run.sh child. A child inherits
+# the open file description and with it the lock, so if this driver is killed
+# while a match is in flight the orphaned match-run.sh keeps the run dir locked
+# until it finishes. That is the outcome we want: the alternative is a fresh
+# driver taking the lock and starting a second match over the same twenty bots
+# the orphan is still driving.
+printf 'pid %s on %s since %s\n' "$$" "$(hostname 2>/dev/null || echo '?')" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$LOCK_FILE"
+
 # --- 0. the bracket ----------------------------------------------------------
 # team.sh is sourced above, so this exercises team existence and faction too --
 # a ladder naming a team that does not exist fails here, in a second, rather
