@@ -1,5 +1,5 @@
 ---
-status: implemented
+status: done
 risk: medium
 area: playerbots/battlegrounds
 depends-on:
@@ -157,3 +157,5 @@ If step 3 shows zero `A:move to objective - OK` while step 6 shows `S:-buff` sti
 - src/modules/PlayerBots/playerbot/strategy/Engine.cpp: The fix removes the no-op trigger but not the engine defect itself: `Init()` -> `Reset()` still drains `queue` while `DoNextAction`'s do-while is mid-walk, so any strategy change issued from inside an action's `Execute()` that genuinely moves the strategy set — including the very first `BGTactics::Execute` tick after `STATUS_IN_PROGRESS`, when "buff" is still attached, and any later tick where `ResetStrategies`/`RandomPlayerbotMgr::ChangeStrategy` has re-added it — still silently kills the rest of that tick and logs `no actions executed`.
 - src/modules/PlayerBots/playerbot/strategy/Engine.cpp: The guard narrows but does not close the re-entrant Init() window: when a strategy change made from inside an action's Execute() actually changes the set, Engine::Reset() still deletes every ActionBasket/ActionNode in `queue` while DoNextAction is mid-walk of it, and the loop survives only incidentally (queue.Pop() already transferred ownership of the current ActionNode, and the freed `basket` is only tested for null, never dereferenced, after ListenAndExecute returns) -- ai->ResetStrategies() two lines above the guarded call site at BattleGroundTactics.cpp:2701 and ChangeStrategy("-collision")/("-arena") at :4879-4902 all still hit it, so any later edit that reads basket-> after Execute becomes a use-after-free across ~1000 bots.
 - src/modules/PlayerBots/playerbot/strategy/Engine.cpp: StrategySignature() builds and concatenates a fresh std::string over the whole strategy map twice per addStrategy/ChangeStrategy call, and BattleGroundTactics.cpp:2718 issues ChangeStrategy("-buff") on every non-combat tick of every bot in a battleground, reintroducing exactly the per-tick string churn that Action.h's NextAction::getName() comment records as the server's top allocation source; a size() early-out or a dirty flag set by add/removeStrategy would give the same guard for free.
+
+**Result:** PR opened at https://github.com/ChrisMiho/tortoise-wow/pull/59, build tortoise-cm:20260818-8.
