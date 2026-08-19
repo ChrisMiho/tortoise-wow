@@ -2,7 +2,9 @@
 # Unit tests for viewer effects: the two halves of a gear tier
 # (gear_items_armor / gear_items_weapon in scripts/tournament/lib/gear.sh), and
 # the effect library itself (scripts/tournament/lib/effects.sh) -- what makes a
-# command well formed and which characters it is allowed to touch.
+# command well formed and which characters it is allowed to touch -- and the
+# append-only queue the mock adapter (scripts/tournament/effect-queue.sh) files
+# commands into.
 #
 # No server and no database. GEAR_DIR points at tests/fixtures/gear -- the
 # committed hand-written fixture -- NOT at config/tournament/gear, which is
@@ -93,5 +95,51 @@ assert_exit 1 "a command with no id is rejected" -- effect_validate "$NOID"
 OFFMATCH='{"id":"a4","ts":"2026-08-16T21:00:00Z","effect":"kill_team","target":{"team":"ironforge-anvils"},"source":"mock"}'
 assert_exit 1 "a team not playing this match is rejected" -- \
   effect_targets "$OFFMATCH" stormwind-sentinels orgrimmar-warsong
+
+# --- the queue and its mock adapter -----------------------------------------
+#
+# effect-queue.sh is run as a subprocess, not sourced, because that is how an
+# adapter will invoke it. TEAM_DIR is exported above, so the child sees the same
+# teams these assertions do.
+q="$(mktemp)"
+
+id1="$(bash "$ROOT/scripts/tournament/effect-queue.sh" --queue "$q" \
+        --effect heal_team --team stormwind-sentinels --source mock)"
+assert_eq "1|1" \
+  "$(wc -l < "$q" | tr -d ' ')|$(grep -c '"effect":"heal_team"' "$q")" \
+  "one command appends exactly one line, and it carries the effect"
+
+# The echoed id is the only handle the caller gets on the command it just filed;
+# if it did not match what was written, a consumer's dedupe list and an adapter's
+# idea of what it sent would silently describe different commands.
+assert_contains "$(cat "$q")" "\"id\":\"$id1\"" \
+  "the id echoed to the caller is the id written to the queue"
+
+first="$(head -1 "$q")"
+bash "$ROOT/scripts/tournament/effect-queue.sh" --queue "$q" \
+     --effect kill_player --team orgrimmar-warsong --slot five >/dev/null
+# Append-only, asserted as such: a line count alone would not catch a rewrite
+# that happened to preserve the count, and the consumer may be mid-read.
+assert_eq "2|$first" "$(wc -l < "$q" | tr -d ' ')|$(head -1 "$q")" \
+  "a second append leaves the first line byte-identical"
+
+assert_contains "$(tail -1 "$q")" '"slot":"five"' \
+  "a _player command records the slot it targets"
+
+# Every line independently parseable, not just the file as a whole: the consumer
+# reads line by line, and one broken line would poison the file for good.
+assert_exit 0 "every queue line is valid JSON on its own" -- \
+  bash -c "while IFS= read -r l; do printf '%s' \"\$l\" | jq -e . >/dev/null || exit 1; done < '$q'"
+
+# A command the applier would refuse must never be filed in the first place: in
+# the queue it is a landmine the consumer trips over mid-match, with nobody there
+# to fix it. So the rejection and the untouched file are one assertion.
+BADRC=0
+bash "$ROOT/scripts/tournament/effect-queue.sh" --queue "$q" \
+     --effect summon_dragon --team stormwind-sentinels >/dev/null 2>&1 || BADRC=$?
+assert_eq "1|2" "$BADRC|$(wc -l < "$q" | tr -d ' ')" \
+  "an unknown effect is refused at enqueue and nothing is appended"
+
+rm -f "$q"
 
 assert_summary
