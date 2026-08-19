@@ -91,8 +91,19 @@ prov_volume_exists()    { docker volume inspect "$1" >/dev/null 2>&1; }
 # grepping docker logs: `grep -q` closes the pipe at its first match, the
 # still-writing producer dies of SIGPIPE, and under `set -o pipefail` the
 # pipeline yields 141 — so an `until ... grep -q` loop never terminates.
+#
+# It also has to ask *inside* the container. Docker's proxy binds the published
+# host port the instant the container starts, so a host-side `nc -z` succeeds
+# while mangosd is still loading the world. Measured 2026-08-18 on a warm boot:
+# the host probe passed at t=6s, mangosd actually listened at t=57s. Callers
+# that start a timeout the moment this returns true — validate-stack's 300s bot
+# window — burn most of it on a server that has not opened yet, and then report
+# a liveness failure against a perfectly good build. The host check stays as a
+# second condition: a world listening inside but unreachable through the
+# published port is still not ready for a client.
 prov_world_ready() {
-    nc -z -w 3 127.0.0.1 "$TW_WORLD_PORT" >/dev/null 2>&1
+    docker exec "$TW_MANGOSD" nc -z -w 3 127.0.0.1 "$TW_WORLD_PORT" >/dev/null 2>&1 \
+        && nc -z -w 3 127.0.0.1 "$TW_WORLD_PORT" >/dev/null 2>&1
 }
 
 # The image ID a tag resolves to right now. Empty when the tag does not exist.
@@ -117,10 +128,25 @@ prov_realm_ok() {
     [ "$row" = "${TW_WORLD_PORT}:0" ]
 }
 
+# Prints a count on stdout, and says WHY on stderr when it cannot get one. The
+# old version sent both the password read and the query to /dev/null, so an
+# unreadable .dbpass, a stopped container and a genuinely empty world all came
+# back as the same silent "0" — the trap `wsg_mysql` has. It still returns 0 on
+# failure so callers keep their numeric contract; what changes is that the
+# operator sees the reason instead of a bare zero.
 prov_online_count() {
-    local pass
-    pass=$(tr -d '\r\n' < "$TW_LIVE_ROOT/.dbpass" 2>/dev/null) || { echo 0; return 0; }
-    docker exec -e MYSQL_PWD="$pass" "$TW_DB" mysql -uroot -N -B -e \
-        "SELECT COUNT(*) FROM tw_char.characters WHERE online=1;" 2>/dev/null \
-        | tr -d '\r' | head -1
+    local pass out rc
+    pass=$(tr -d '\r\n' < "$TW_LIVE_ROOT/.dbpass" 2>/dev/null) || {
+        echo "prov_online_count: cannot read $TW_LIVE_ROOT/.dbpass" >&2
+        echo 0; return 0
+    }
+    out=$(docker exec -e MYSQL_PWD="$pass" "$TW_DB" mysql -uroot -N -B -e \
+        "SELECT COUNT(*) FROM tw_char.characters WHERE online=1;" 2>&1)
+    rc=$?
+    out=$(printf '%s' "$out" | tr -d '\r' | head -1)
+    if [ "$rc" -ne 0 ] || ! printf '%s' "$out" | grep -qE '^[0-9]+$'; then
+        echo "prov_online_count: query failed (rc=$rc): $out" >&2
+        echo 0; return 0
+    fi
+    printf '%s\n' "$out"
 }
