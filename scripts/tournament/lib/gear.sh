@@ -131,3 +131,44 @@ gear_validate() { # <class> <role> -> 0 if valid, else 1 with faults on stderr
 
     return "$faults"
 }
+
+# --- splitting a tier into the two things a viewer can buy -------------------
+#
+# `upgrade_armor_*` and `upgrade_weapon_*` are separate effects with separate
+# prices, so a tier -- a single flat slot->itemId map -- has to be splittable.
+# Without this, both effects apply the whole kit and a viewer cannot tell which
+# one they paid for.
+#
+# The weapon slots, and only these three, per EQUIPMENT_SLOT_MAINHAND / OFFHAND /
+# RANGED in src/game/Objects/Player.h:590-610. Named once, here, because the two
+# splitters must agree by construction: a slot they disagree about is a slot no
+# effect can ever upgrade.
+#
+# EVERYTHING ELSE IN A TIER IS ARMOUR -- including neck, finger1, trinket1 and
+# back, which are not "armour" in the item-class sense at all. They go in the
+# armour half anyway, because "upgrade my armour" means "upgrade everything that
+# is not the weapon" to the viewer paying for it, and a slot in neither half
+# would be permanently unreachable by any effect.
+GEAR_WEAPON_SLOTS="mainhand offhand ranged"
+
+# Both splitters print from inside the `while` rather than accumulating into a
+# variable: the loop is the right-hand side of a pipe, so it runs in a subshell
+# and anything it assigns is gone by the time the function returns.
+gear_items_weapon() { # <class> <role> <tier> -> slotName|itemId lines, weapons only
+    local slot id
+    gear_items "$1" "$2" "$3" | while IFS='|' read -r slot id; do
+        case " $GEAR_WEAPON_SLOTS " in
+            *" $slot "*) printf '%s|%s\n' "$slot" "$id" ;;
+        esac
+    done
+}
+
+gear_items_armor() { # <class> <role> <tier> -> slotName|itemId lines, all the rest
+    local slot id
+    gear_items "$1" "$2" "$3" | while IFS='|' read -r slot id; do
+        case " $GEAR_WEAPON_SLOTS " in
+            *" $slot "*) ;;
+            *) printf '%s|%s\n' "$slot" "$id" ;;
+        esac
+    done
+}
