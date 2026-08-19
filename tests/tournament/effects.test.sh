@@ -142,4 +142,72 @@ assert_eq "1|2" "$BADRC|$(wc -l < "$q" | tr -d ' ')" \
 
 rm -f "$q"
 
+# --- the consumer: dedupe and rate limits -----------------------------------
+#
+# effect-consume.sh is the only thing that turns a queued command into something
+# that happens in the world, and both properties asserted here are correctness
+# requirements rather than polish: the queue is append-only and replayed from
+# byte zero after a crash, and `kill_team` decides matches.
+#
+# No server. The consumer sources $CTL_STUB instead of lib/ctl.sh when that
+# variable is set, so `ctl` here is a local function that reports ok=1 for
+# everything -- which makes every assertion below about the consumer's own
+# bookkeeping, not about the control plane.
+q2="$(mktemp)"; st="$(mktemp -d)"
+cat > "$st/ctlstub.sh" <<'STUB'
+ctl() { printf 'TOURNAMENT %s ok=1\n' "$*"; }
+ctl_field() { printf '%s\n' "$1" | sed -n "s/.*[[:space:]]$2=\\([^[:space:]]*\\).*/\\1/p" | head -1; }
+STUB
+
+idA="$(bash "$ROOT/scripts/tournament/effect-queue.sh" --queue "$q2" \
+        --effect heal_player --team stormwind-sentinels --slot one)"
+# The same id twice: an adapter double-delivery, or a queue replayed after a
+# crash. Both are ordinary, and both must land on the bot exactly once.
+bash "$ROOT/scripts/tournament/effect-queue.sh" --queue "$q2" \
+     --effect heal_player --team stormwind-sentinels --slot one --id "$idA" >/dev/null
+
+OUT="$(CTL_STUB="$st/ctlstub.sh" bash "$ROOT/scripts/tournament/effect-consume.sh" \
+        --queue "$q2" --alliance stormwind-sentinels --horde orgrimmar-warsong \
+        --state "$st" --once 2>&1)"
+
+assert_eq "1" "$(grep -c "^EFFECT id=$idA" <<< "$OUT")" \
+  "a duplicate id is applied exactly once"
+
+# Reported, not merely dropped: silently swallowing a repeat makes an adapter
+# that double-delivers every command indistinguishable from a healthy one.
+assert_contains "$OUT" "skipped=1" \
+  "and the duplicate is counted as skipped on the CONSUME line"
+
+assert_eq "1" "$(grep -c "^$idA\$" "$st/applied.txt")" \
+  "an applied id is recorded once, which is what makes the next pass a no-op"
+
+OUT2="$(CTL_STUB="$st/ctlstub.sh" bash "$ROOT/scripts/tournament/effect-consume.sh" \
+         --queue "$q2" --alliance stormwind-sentinels --horde orgrimmar-warsong \
+         --state "$st" --once 2>&1)"
+assert_eq "0" "$(grep -c "^EFFECT " <<< "$OUT2")" \
+  "a second pass over the same queue applies nothing"
+
+# kill_team wipes ten bots and ends a Warsong Gulch match, so the cap has to
+# bite on the very next command, not eventually. Note that counts.txt already
+# exists by now, holding heal_player and no kill_team line -- the exact state a
+# naive `grep -c ... || echo 0` counter returns "0\n0" for, which makes the
+# comparison below fail as a non-integer and never limit anything.
+for i in 1 2 3; do
+  bash "$ROOT/scripts/tournament/effect-queue.sh" --queue "$q2" \
+       --effect kill_team --team orgrimmar-warsong >/dev/null
+done
+OUT3="$(CTL_STUB="$st/ctlstub.sh" EFFECT_LIMIT_KILL_TEAM=1 \
+        bash "$ROOT/scripts/tournament/effect-consume.sh" \
+        --queue "$q2" --alliance stormwind-sentinels --horde orgrimmar-warsong \
+        --state "$st" --once 2>&1)"
+assert_eq "1" "$(grep -c 'effect=kill_team' <<< "$OUT3")" \
+  "kill_team is rate limited to one under EFFECT_LIMIT_KILL_TEAM=1"
+
+# Counted apart from a duplicate, because the two mean opposite things: one says
+# viewers are over the cap, the other says the adapter is delivering twice.
+assert_contains "$OUT3" "ratelimited=2" \
+  "and the two over the cap are reported as rate limited, not skipped"
+
+rm -rf "$q2" "$st"
+
 assert_summary
