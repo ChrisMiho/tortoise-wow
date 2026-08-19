@@ -1,5 +1,5 @@
 ---
-status: implemented
+status: done
 risk: medium
 area: tournament/effects
 depends-on: 032-viewer-effect-library.md
@@ -67,3 +67,5 @@ Note rule 5 of the environment brief: the only server image on this host predate
 - scripts/tournament/lib/effects.sh: An `already_top_tier` no-op is counted into `applied` and leaves rc=0, so the machine-readable EFFECT line for a second purchase is byte-identical to a real upgrade (applied=1 failed=0) and the distinct reason exists only on stderr, which effect-consume.sh does not parse before recording the id in applied.txt.
 - scripts/tournament/lib/effects.sh: effect_tier_file's no-state-dir fallback is always called inside a command substitution, so the `EFFECT_TIER_FILE=$(mktemp ...)` assignment dies with the subshell: every call mints a fresh empty temp file (verified: three logical uses produced four distinct /tmp/effect-tiers.* files), so nothing written by effect_tier_record is ever read back by effect_tier_current, the documented "still no silent re-equip within a run" guarantee does not hold, and the temp files leak.
 - scripts/tournament/lib/effects.sh: Batching every target into one 40s attach makes tiers.txt diverge from the world when the console reply is truncated or late — mangosd queues the equips via QueueCliCommand and still runs them after detach, but effect_apply sees no summary line, so it counts all ten targets failed, records no tier, and the consumer still writes the id to applied.txt, leaving the next paid upgrade to re-send the tier the bots are already wearing (the exact silent re-equip this change removes), now for the whole batch at once instead of one target.
+
+**Result:** PR opened at https://github.com/ChrisMiho/tortoise-wow/pull/73, build tortoise-cm:20260819-4.

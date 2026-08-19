@@ -1,5 +1,5 @@
 ---
-status: implemented
+status: done
 risk: low
 area: game/tournament
 depends-on: 030-tournament-heal-and-kill-commands.md
@@ -52,3 +52,5 @@ Once a server built from this branch is up, the whole check is readable from the
 6. Absence check in the logs: `docker logs tcm-mangos 2>&1 | grep 'TOURNAMENT heal'` should contain no line pairing a `resurrected=1` with a character that is still dead, and no `reason=resurrect_refused` line for an ordinary bot — that reason firing for a non-hardcore target would mean `ResurrectPlayer` is declining for some other reason and is worth investigating.
 
 Steps 2, 3, 5 and 6 are fully scriptable from console output alone. Step 4's prerequisite (obtaining a dead hardcore character inside a battleground) is the only part that plausibly needs a human, since hardcore flagging and getting that character into a BG is not something the bot harness does.
+
+**Result:** PR opened at https://github.com/ChrisMiho/tortoise-wow/pull/75, build tortoise-cm:20260819-4.

@@ -1,5 +1,5 @@
 ---
-status: implemented
+status: done
 risk: medium
 area: game/battlegrounds
 depends-on: 026-battleground-telemetry-sampler.md
@@ -62,3 +62,5 @@ Requires a human only for: nothing functional. The remaining acceptance criterio
 
 **Minor findings:**
 - src/game/Battlegrounds/BattleGround.cpp: `#include "Config/Config.h"` in BattleGround.cpp was added solely for the sampler's `sConfig.GetIntDefault` call (commit 41e15e4) and is now dead after the gate moved to `sWorld.getConfig` — no other `sConfig` use remains in the file.
+
+**Result:** PR opened at https://github.com/ChrisMiho/tortoise-wow/pull/76, build tortoise-cm:20260819-4.

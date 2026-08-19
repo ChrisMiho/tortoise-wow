@@ -1,5 +1,5 @@
 ---
-status: implemented
+status: done
 risk: medium
 area: tournament/match-run
 depends-on: 035-run-effect-consumer-during-a-match.md
@@ -74,3 +74,5 @@ Needs a human in the world (the one thing the stub cannot prove — artifact not
 - scripts/tournament/lib/effect-runner.sh: effect_consumer_stop does an unbounded `wait "$pid"` before the grace/SIGKILL escalation loop, so the escalation is unreachable for the one case it exists to cover: a consumer that defers or ignores SIGTERM (its own TERM trap, or SIGSTOP) leaves match-run.sh blocked in the stop forever instead of SIGKILLing the group after EFFECT_STOP_GRACE_S.
 - scripts/tournament/lib/effect-runner.sh: effect_consumer_stop clears EFFECT_PID/EFFECT_PGID before it kills, so a SIGTERM arriving while the explicit post-loop stop is inside its `sleep 1` grace poll makes the trap's re-entrant stop a no-op that immediately re-raises and exits — abandoning a group that received only SIGTERM and never the SIGKILL escalation, which is exactly the "no effect-consume process remains" criterion.
 - docs/playerbots/TOURNAMENT-VIEWER-EFFECTS.md: The header guarantee ("once effect_consumer_stop has returned, nothing started by the consumer can still deliver an effect") and the matching doc paragraph overstate what a host-side process-group kill can do: `ctl` reaches the world through `wsg_console`, which writes the command into `docker attach`'s stdin, and once that text is in mangosd's QueueCliCommand the effect executes on the world thread no matter what happens to the consumer's group.
+
+**Result:** PR opened at https://github.com/ChrisMiho/tortoise-wow/pull/74, build tortoise-cm:20260819-4.
