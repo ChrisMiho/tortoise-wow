@@ -1,5 +1,5 @@
 ---
-status: pending
+status: done
 risk: medium
 area: playerbots/battlegrounds
 depends-on:
@@ -128,3 +128,34 @@ and the relevance table in
   the same regression window.
 - `bots.log` is large. Use `scripts/tournament/bot-log-capture.sh --mark` /
   `--since` for the match window rather than an unbounded read.
+
+**Base:** cm-main
+
+**Branch:** backlog/wsg-bots-never-execute-bg-move-to-objective
+
+**Summary:** Established the cause by reading, and it is (a), an engine defect — the relevance table is untouched. `BGTactics::Execute` calls `ai->ChangeStrategy("-buff", BOT_STATE_NON_COMBAT)` on every tick of a battleground in progress (`src/modules/PlayerBots/playerbot/strategy/actions/BattleGroundTactics.cpp:2716-2718`). `Engine::ChangeStrategy` ended with an unconditional `Init()` (`src/modules/PlayerBots/playerbot/strategy/Engine.cpp:871-872` pre-fix), and `Init()` (`:104`) calls `Reset()` (`:79-92`), which pops and deletes every `ActionBasket` still in `queue`. Because that call is issued from inside `ListenAndExecute`, it lands mid-way through `DoNextAction`'s `do { ... } while (basket && ++iterations <= iterationsPerTick)` walk (`:141-326`): the next `queue.Peek()` returns NULL, `basket` goes null, the loop exits, and the tick logs `no actions executed` (`:352`). `bg check flag` at relevance 70 is merely the first `BGTactics` action popped each tick, so it is the one that detonates the queue; `bg check objective` (10), `check mount state` (2) and `bg move to objective` (1.0) are deleted before they can be popped. This accounts for the measured asymmetry exactly: in the 1,414 gate-phase ticks `bg->GetStatus()` is `STATUS_WAIT_JOIN`, the `ChangeStrategy` line never runs, the queue survives, and relevance 1.0 is reached 188 times; in the 25,476 match ticks it runs every tick and relevance 1.0 is reached 12 times. The fix adds `Engine::StrategySignature()` (ordered join of attached strategy names) and makes `Engine::addStrategy` and `Engine::ChangeStrategy` call `Init()` only when that signature actually changed — `-buff` changes it once, on the first BGTactics tick after the gates open, and every tick after is a genuine no-op that leaves the queue intact. `PlayerbotAI::ResetStrategies` was checked and is unaffected: it drives `initMode` and calls `Init()` explicitly itself. Files: `src/modules/PlayerBots/playerbot/strategy/Engine.cpp`, `src/modules/PlayerBots/playerbot/strategy/Engine.h`, and `docs/playerbots/BG-AI-ANALYSIS.md` (new §4.2a "after" subsection next to the before numbers, plus a correction to finding F-11, which had scored this same call "no behavioural difference expected"). No SQL migration. NOT DONE HERE, deliberately: the third acceptance criterion is a live 20-minute WSG match with `Tournament.TelemetryIntervalMs = 5000` — that needs a build of this branch, which rule 4 forbids in this phase, and the only server image on the host predates the change. §4.2a states plainly that the after-numbers are pending rather than inventing them; the backlog-batch validation pass is where that run belongs, and it should amend §4.2a with the measured values.
+
+**In-game check:** This needs a real WSG match; the generic "server starts, bots spawn" smoke test will not show it, because the bug only appears once a battleground reaches STATUS_IN_PROGRESS.
+
+Scriptable, no human eyes needed (do these first):
+1. Build this branch, bring the stack up, and run the same procedure as run 037-wsg-2: `AiPlayerbot.EnableActionLog = 1` and `Tournament.TelemetryIntervalMs = 5000`, 20 `Wsg*` bots queued into one Warsong Gulch instance, match left to run 20 minutes.
+2. Mark the log window with `scripts/tournament/bot-log-capture.sh --mark` before the gates open and `--since` after the match, so `bots.log` is sliced rather than read whole.
+3. In the sliced window, `grep -c 'A:move to objective - OK'` must be non-zero, and `grep 'A:move to objective - OK' | awk '{print $1}' | sort -u | wc -l` must be at least 5 distinct bot names. Before the fix this count is exactly 0 over 403,139 lines, so any non-zero value is decisive.
+4. In the same window, the share of ticks ending `no actions executed` must fall well below the measured 98.8% — count `--- AI Tick ---` against `no actions executed`.
+5. `scripts/tournament/telemetry-report.sh` on the run's telemetry CSV must show at least 15 of the 20 bots with `distance > 100` on its `MOVEMENT` lines, and at least one sample with an Alliance bot and a Horde bot within 30 yards (before the fix the minimum separation was 544.8 yd, at the first sample). Run these from WSL, not Git Bash (jq).
+6. Confirm no regression in strategy handling: `grep 'S:-buff'` in the window should appear roughly once per bot near the match start, not once per bot per tick. That is the direct signature of the fix — the no-op ChangeStrategy no longer rebuilds.
+
+Manual, in-game (a human on a GM account):
+7. `.go` into the running WSG instance shortly after the gates open and watch: bots should leave their tunnel and run the field along the BattleBot paths instead of standing on the spawn point. Both faction groups should meet somewhere near mid-field within the first minute or two, and a flag room should get visited.
+8. Let the match run to its end and check the final score is not 0-0, and that `honor.log` records flag-capture honour awards for the run.
+
+If step 3 shows zero `A:move to objective - OK` while step 6 shows `S:-buff` still firing every tick, the guard did not take effect and the build is stale — check the image tag before touching the code.
+
+**Minor findings:**
+
+- docs/playerbots/BG-AI-ANALYSIS.md: Acceptance criteria 3 and 4 are not met by this diff: §4.2a explicitly states "The 'after' match numbers are not filled in yet", so no WSG run with Tournament.TelemetryIntervalMs = 5000 has been made and BG-AI-ANALYSIS §4 carries no measured after numbers (15/20 bots > 100 yd, one Alliance/Horde sample within 30 yd, `A:move to objective - OK` for five distinct bots) — the batch build/validate pass must run the match and amend that paragraph before this can be called done.
+- src/modules/PlayerBots/playerbot/strategy/Engine.cpp: The fix removes the no-op trigger but not the engine defect itself: `Init()` -> `Reset()` still drains `queue` while `DoNextAction`'s do-while is mid-walk, so any strategy change issued from inside an action's `Execute()` that genuinely moves the strategy set — including the very first `BGTactics::Execute` tick after `STATUS_IN_PROGRESS`, when "buff" is still attached, and any later tick where `ResetStrategies`/`RandomPlayerbotMgr::ChangeStrategy` has re-added it — still silently kills the rest of that tick and logs `no actions executed`.
+- src/modules/PlayerBots/playerbot/strategy/Engine.cpp: The guard narrows but does not close the re-entrant Init() window: when a strategy change made from inside an action's Execute() actually changes the set, Engine::Reset() still deletes every ActionBasket/ActionNode in `queue` while DoNextAction is mid-walk of it, and the loop survives only incidentally (queue.Pop() already transferred ownership of the current ActionNode, and the freed `basket` is only tested for null, never dereferenced, after ListenAndExecute returns) -- ai->ResetStrategies() two lines above the guarded call site at BattleGroundTactics.cpp:2701 and ChangeStrategy("-collision")/("-arena") at :4879-4902 all still hit it, so any later edit that reads basket-> after Execute becomes a use-after-free across ~1000 bots.
+- src/modules/PlayerBots/playerbot/strategy/Engine.cpp: StrategySignature() builds and concatenates a fresh std::string over the whole strategy map twice per addStrategy/ChangeStrategy call, and BattleGroundTactics.cpp:2718 issues ChangeStrategy("-buff") on every non-combat tick of every bot in a battleground, reintroducing exactly the per-tick string churn that Action.h's NextAction::getName() comment records as the server's top allocation source; a size() early-out or a dirty flag set by add/removeStrategy would give the same guard for free.
+
+**Result:** PR opened at https://github.com/ChrisMiho/tortoise-wow/pull/59, build tortoise-cm:20260818-8.
