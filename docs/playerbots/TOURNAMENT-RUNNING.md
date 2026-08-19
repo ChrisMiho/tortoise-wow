@@ -151,14 +151,86 @@ TOURNAMENT-RUN bracket=wsg-open status=failed reason=no_result(ironforge-anvils 
 **Exactly the 20 bots playing the current match are in the world.** Before each
 match `match-run.sh` logs every other team out, brings the two playing teams in,
 and then gates on the population: if more than one character outside the two
-rosters is online, it refuses to start the match.
+rosters is online, it refuses to start the match. The one it allows for is the GM
+spectator.
 
-That includes the alive-world random bot pool, which **must be off before you
-start a run**. Bot AI is single-core, so a random pool sharing it slows every bot
-in the battleground and changes the match you are trying to measure. Turn it off
-in `aiplayerbot.conf` and restart mangosd *first* — no script here will do it
-mid-run, because that would change the world underneath a match in progress.
-`tournament-run.sh` does not manage that pool at all.
+### The random pool runs at zero — and that is an operator step
+
+The alive world ships with **1000** random bots — `AiPlayerbot.MinRandomBots` and
+`MaxRandomBots`, both `1000` in `aiplayerbot.conf.dist.in:57-58`. A tournament
+runs with that pool at **zero**, so the only characters online are the twenty
+playing plus a GM spectator.
+
+**That is a CPU decision, not a memory one.** Bot AI is single-core, so every
+random bot that thinks is time the twenty bots in the battleground do not get.
+Memory at 1000 bots is comfortable — **4.27 GiB measured** — so a match that
+degrades is telling you about the scheduler, not about RSS, and giving the box
+more RAM will not fix it.
+
+Zero is a legal value for this build, not a special case that has to be rounded up
+to 40. `RandomPlayerbotMgr::UpdateAIInternal` draws its target from
+`urand(minRandomBots, maxRandomBots)` and then only logs bots in while
+`availableBotCount < maxAllowedBotCount` (`RandomPlayerbotMgr.cpp:671-703`), so a
+target of 0 simply never refills. Nothing logs an *already online* bot out for
+exceeding the target either — the only logout lever is `RandomBotTimedLogout`
+(`RandomPlayerbotMgr.cpp:2316`), which the match profile pins to `0`.
+
+**`rndbot add <name>` still works with the pool at zero**, which is what the whole
+design rests on: the tournament characters are logged in explicitly by
+`roster.sh login`, never by the pool's auto-login. `AddRandomBot()` checks the
+random-account list and the stale-login event and never reads `minRandomBots` or
+`maxRandomBots` at all (`RandomPlayerbotMgr.cpp:2232-2291`). Verified live on
+2026-08-18 against `tortoise-cm:20260818-5` booted with `0/0`: `rndbot add` brought
+the named character online and it stayed online.
+
+### Setting it, and putting it back
+
+`tournament-run.sh` does **not** manage the pool. It will not shrink it before a
+run and will not restore it after, because doing either mid-run would change the
+world underneath a match in progress. Both are operator steps, and both need a
+mangosd restart — the pool size is read at boot.
+
+```bash
+# before the run
+docs/playerbots/wsg/wsg-mode.sh on --tournament     # pool 0/0, restarts mangosd
+./scripts/tournament/tournament-run.sh wsg-open --run-dir logs/tournament/friday
+# after the run
+docs/playerbots/wsg/wsg-mode.sh off                 # restores what was there before `on`
+```
+
+Run both from **WSL**, not Git Bash. `--tournament` also skips `wsg-roster.sh
+ensure`, which plain `on` runs: that is the WSG demo roster, not the tournament
+roster, and every one of those characters online is a character `match-run.sh`'s
+population gate counts and refuses to start on.
+
+What `on` actually does is **snapshot, not hardcode**: it records the live value of
+every lever it is about to change into
+`~/tortoise-wow-server-V2/.wsg-mode-snapshot.json`, and `off` writes back exactly
+those values. So `off` restores the pool you had, whatever it was — 1000 or
+anything else. Plain `on` uses 40, the WSG-match value; `on --tournament` uses 0.
+`on` refuses to run when a snapshot already exists, because a second `on` would
+snapshot match-mode values as "how it was". If `status` says `wsg-match` on a world
+whose conf looks like the alive world, that is a leftover snapshot from an
+abandoned session — check the file's timestamp before trusting either.
+
+The one hardcoded profile is the fallback in the `off` path, used only when there
+is no snapshot: `wsg-mode.sh off --profile alive-world`. It no longer carries
+literals for the conf keys; it reads them out of the shipped
+`aiplayerbot.conf.dist.in` and `mangosd.conf.dist.in` (with literals kept only as a
+last resort for a host that has no source tree). It used to say `200` bots, from
+before the compiled default became 1000, so the "documented alive-world profile"
+quietly restored a world a fifth of its intended size.
+
+**Confirm the restore.** A world left at zero is the failure mode that does not
+announce itself — mangosd is healthy, realmd answers, nothing errors, and the world
+is simply empty:
+
+```bash
+docs/playerbots/wsg/wsg-mode.sh status     # prints Min/MaxRandomBots from the live conf
+```
+
+`PlayerSave.Interval` is 60 s, so counting online characters in `tw_char.characters`
+lags reality by up to a minute; the conf values in `status` are immediate.
 
 ## Terminal lines
 
