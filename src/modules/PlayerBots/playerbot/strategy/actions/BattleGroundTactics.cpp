@@ -2636,10 +2636,10 @@ bool BGTactics::wsgRoofJump()
     if (atAllianceSecondFloorJump && (!inCombat || (pos.z < 361.f && pos.x < 1421.f)))
     {
         // not at jump point
-        if (bot->GetPositionY() < 1468.f)
+        if (bot->GetPositionY() < 1466.f)
             return MoveTo(bg->GetMapId(), WS_FLAG_ALLIANCE_FLOOR_JUMP_UPPER.x, WS_FLAG_ALLIANCE_FLOOR_JUMP_UPPER.y, WS_FLAG_ALLIANCE_FLOOR_JUMP_UPPER.z);
         else
-            return MoveTo(bg->GetMapId(), WS_FLAG_ALLIANCE_FLOOR_JUMP_UPPER.x, WS_FLAG_ALLIANCE_FLOOR_JUMP_UPPER.y, WS_FLAG_ALLIANCE_FLOOR_JUMP_UPPER.z, false, false, true);
+            return MoveTo(bg->GetMapId(), WS_FLAG_ALLIANCE_FLOOR_JUMP_LOWER.x, WS_FLAG_ALLIANCE_FLOOR_JUMP_LOWER.y, WS_FLAG_ALLIANCE_FLOOR_JUMP_LOWER.z, false, false, true);
     }
     return false;
 }
