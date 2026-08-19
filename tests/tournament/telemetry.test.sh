@@ -88,6 +88,25 @@ assert_eq "exit 1, names the instance, the log and the cause, and writes no file
   "$(no_samples)" \
   "an instance with no samples exits 1, says why, and leaves no header-only file"
 
+# Regression: writing no file is not the same as leaving no file. $OUT is a path
+# the CALLER owns and reuses -- match-run.sh always writes telemetry.csv into the
+# run dir -- so a no-samples run that merely exits 1 leaves the PREVIOUS run's
+# CSV sitting there, and the report step, which only checks the file, reads
+# instance 101's match as instance 202's.
+stale_out() { # -> a sentence naming what happened to the pre-existing CSV
+    local out="$TMP/stale.csv" rc=0
+    bash "$EXTRACT" --instance 101 --log "$FIX" --out "$out" 2>/dev/null || rc=$?
+    [ "$rc" -eq 0 ] || { printf 'the seeding run for instance 101 exited %s\n' "$rc"; return 0; }
+    grep -q 'Wsgaone' "$out" || { printf 'the seeding run wrote no instance-101 rows\n'; return 0; }
+    rc=0
+    bash "$EXTRACT" --instance 202 --log "$FIX" --out "$out" 2>/dev/null || rc=$?
+    [ "$rc" -eq 1 ] || { printf 'the no-samples run exited %s, expected 1\n' "$rc"; return 0; }
+    [ ! -e "$out" ] || { printf 'exit 1 but instance 101 CSV is still at %s: %s\n' "$out" "$(head -2 "$out" | tr '\n' ' ')"; return 0; }
+    printf 'the stale CSV is gone\n'
+}
+assert_eq "the stale CSV is gone" "$(stale_out)" \
+  "a no-samples extract removes a CSV an earlier successful run left at the same --out"
+
 # Exit 2, not 1. "There is nothing to read" and "the sampler wrote nothing" send
 # the operator to completely different places, and a caller that retries on 1
 # would spin forever on a path typo.

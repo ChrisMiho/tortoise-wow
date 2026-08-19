@@ -36,6 +36,8 @@ ROOT="$(cd "$HERE/../.." && pwd)"
 . "$HERE/lib/team.sh"
 # shellcheck source=lib/ctl.sh
 . "$HERE/lib/ctl.sh"
+# shellcheck source=lib/artifacts.sh
+. "$HERE/lib/artifacts.sh"
 # shellcheck source=../../docs/playerbots/wsg/lib/wsg-bots-common.sh
 . "$ROOT/docs/playerbots/wsg/lib/wsg-bots-common.sh"
 
@@ -99,10 +101,21 @@ while [ "$#" -gt 0 ]; do
 done
 mkdir -p "$RUN_DIR" || { echo "FATAL: cannot create run dir $RUN_DIR" >&2; exit 1; }
 
+# The default run dir is SHARED by every ad-hoc match, and nothing else ever
+# removes this file, so a --mark that failed or a run that was aborted after the
+# mark leaves an offset from a previous match sitting in it. Section 6b gates the
+# capture on the file merely existing, so that stale offset does not take the
+# skip branch -- it captures the PREVIOUS match's window and files it under this
+# one. Clearing it here is what makes "the file exists" mean "this run marked it".
+rm -f "$RUN_DIR/bots.offset" \
+    || { echo "FATAL: cannot clear a stale $RUN_DIR/bots.offset" >&2; exit 1; }
+
 # Everything narrating the run goes to stderr AND to match.log; stdout is left
 # clean for the MATCH line and for the function that echoes the instance id.
 # A log() that wrote to stdout would end up INSIDE "$(assemble_direct)".
 log() { printf '[%s] %s\n' "$(date -u +%H:%M:%SZ)" "$*" | tee -a "$RUN_DIR/match.log" >&2; }
+# lib/artifacts.sh narrates through this, so its lines land in match.log too.
+artifacts_log() { log "$*"; }
 
 fatal() { log "FATAL: $*"; exit 1; }
 
@@ -535,26 +548,11 @@ DURATION=$(( $(date +%s) - START_TS ))
 # a missing telemetry sample is a missing artifact, not a void result, and a
 # script that exited 1 here would tell the bracket driver the match never
 # happened. Failures are logged and dropped.
-if [ -x "$HERE/telemetry-extract.sh" ]; then
-    if "$HERE/telemetry-extract.sh" --instance "$INST" --out "$RUN_DIR/telemetry.csv" \
-            >> "$RUN_DIR/match.log" 2>&1; then
-        # telemetry-report.sh exits 1 when a bot is stuck or fewer than twenty
-        # entered. That is a finding about the bots, not a failure of this run --
-        # the report is written either way and the exit status is only logged.
-        if "$HERE/telemetry-report.sh" "$RUN_DIR/telemetry.csv" \
-                > "$RUN_DIR/telemetry-report.txt" 2>&1; then
-            log "telemetry report written to $RUN_DIR/telemetry-report.txt"
-        else
-            log "telemetry report flags a problem (stuck bots, or fewer than 20 entered) -- see $RUN_DIR/telemetry-report.txt"
-        fi
-    else
-        log "telemetry unavailable for instance $INST (is Tournament.TelemetryIntervalMs set, and was mangosd restarted after setting it?)"
-    fi
-else
-    # The extractor and the report ship separately from this file. Their absence
-    # is a "no telemetry today", not a broken match.
-    log "$HERE/telemetry-extract.sh is not present -- skipping telemetry artifacts"
-fi
+# telemetry-report.sh exits 1 when a bot is stuck or fewer than twenty entered.
+# That is a finding about the bots, not a failure of this run -- but only when the
+# script actually ran, which is why the branching lives in lib/artifacts.sh and is
+# tested there.
+telemetry_artifacts "$HERE" "$RUN_DIR" "$INST"
 
 if [ -f "$RUN_DIR/bots.offset" ]; then
     "$HERE/bot-log-capture.sh" --since "$RUN_DIR/bots.offset" \
