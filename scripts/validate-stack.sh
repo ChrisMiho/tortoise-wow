@@ -99,19 +99,30 @@ if [ "$RUN_ID" != "$WANT_ID" ]; then
 fi
 echo "gate 2:   identity OK ($RUN_ID)"
 
-# Boot takes about a minute. Poll rather than sleep-and-hope; a fixed sleep is
-# either too short on a cold cache or wasted time on a warm one.
-echo "==> waiting for the world port"
-deadline=$(( $(date +%s) + 300 ))
+# Boot takes about a minute warm. Poll rather than sleep-and-hope; a fixed sleep
+# is either too short on a cold cache or wasted time on a warm one.
+#
+# This window is deliberately much larger than the bot window below. prov_world_
+# ready now waits for mangosd to really listen rather than for docker-proxy to
+# bind the host port, so the whole cold-boot world load lands here instead of
+# silently leaking into the bot window and failing THAT gate. Measured warm on
+# 2026-08-18: mangosd listening at 57s, world port answering at 67s. The first
+# boot straight off a freshly built 2.3 GiB image reads its layers and map data
+# from disk and took over 300s, which is what this budget is sized for.
+WORLD_WINDOW="${TW_WORLD_WINDOW:-900}"
+echo "==> waiting for the world port (up to ${WORLD_WINDOW}s)"
+deadline=$(( $(date +%s) + WORLD_WINDOW ))
 until prov_world_ready; do
-  [ "$(date +%s)" -lt "$deadline" ] || die_failed "LIVENESS — world port $TW_WORLD_PORT never opened within 300s"
+  [ "$(date +%s)" -lt "$deadline" ] || die_failed "LIVENESS — world port $TW_WORLD_PORT never opened within ${WORLD_WINDOW}s"
   sleep 5
 done
 
 prov_realm_ok || die_failed "LIVENESS — realmlist is not ${TW_WORLD_PORT}:0 (realmflags=2 means offline; a mismatched port hangs the client after login)"
 echo "gate 3a:  realm OK (port=$TW_WORLD_PORT realmflags=0)"
 
-# Bots trickle in after the world is up, so this gets its own window.
+# Bots trickle in after the world is up, so this gets its own window. It starts
+# from a real world-ready, so 300s is generous: measured 2026-08-18, 717
+# characters were already online at the first poll after the port opened.
 echo "==> waiting for bots to log in"
 deadline=$(( $(date +%s) + 300 ))
 online=0
