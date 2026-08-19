@@ -1,5 +1,5 @@
 ---
-status: pending
+status: implemented
 risk: low
 area: playerbots/battlegrounds
 depends-on:
@@ -53,3 +53,26 @@ matching registrations in `strategy/TriggerContext.h`.
   in the same document: `flagTaken()` means "*my* team holds the *enemy* flag"
   and `teamFlagTaken()` means "the *enemy* holds *my* flag", both named
   backwards relative to what they return.
+
+**Base:** cm-main
+
+**Branch:** backlog/pvp-flag-triggers-compiled-out-by-ifdef-mangos
+
+**Summary:** Took the "port" route in `src/modules/PlayerBots/playerbot/strategy/triggers/PvpTriggers.cpp`: removed the `#ifdef MANGOS` guards from `PlayerHasNoFlag`, `PlayerIsInBattlegroundWithoutFlag` and `TeamHasFlag`, and rewrote their bodies against this fork's API. The dead bodies called `GetAllianceFlagCarrierGuid()`/`GetHordeFlagCarrierGuid()`, which exist nowhere in `src/`; they now use `BattleGroundWS::GetFlagCarrierGuid(idx)` indexed by the flag's owning team, factored into one file-local `BotCarriesEnemyFlag(bot, bg)` helper. The index semantics are documented in a comment: `m_FlagKeepers[TEAM_INDEX_ALLIANCE]` is the Silverwing (Alliance) flag, which only a Horde player can carry, so the only flag a bot can hold is its enemy team's — matching how the already-working `PlayerHasFlag` and `EnemyTeamHasFlag` next to them read it. Also fixed the `GetGUIDLow()`-compared-to-`ObjectGuid` mistake the dead `PlayerIsInBattlegroundWithoutFlag` body carried. Chose porting over deletion because the three names are part of the strategy vocabulary a future WSG flag strategy will want and the neighbouring flag triggers already work. Verified `grep -rn "ifdef MANGOS\b" src/` returns nothing in PvpTriggers.cpp and `grep -rn "GetAllianceFlagCarrierGuid\|GetHordeFlagCarrierGuid" src/` returns nothing at all. No strategy fires any of the three trigger names today and none was added, so runtime behaviour is unchanged. No build was run here per the drain's no-Docker-build rule; the batch pass is the compile gate.
+
+**In-game check:** This change is behaviour-neutral by construction: no strategy in the repo names "player has no flag", "team has flag" or "in battleground without flag", so nothing instantiates these three triggers at runtime. The real gate is the compiler — the old bodies referenced `GetAllianceFlagCarrierGuid()`/`GetHordeFlagCarrierGuid()`, which do not exist, so the batch build either succeeds (proving the port is valid against this fork's API) or fails loudly.
+
+Scriptable, no human needed:
+1. Build the batch image. A clean compile of `PvpTriggers.cpp` is the primary acceptance check.
+2. `grep -rn "ifdef MANGOS\b" src/modules/PlayerBots/playerbot/strategy/triggers/PvpTriggers.cpp` → no output.
+3. `grep -rn "GetAllianceFlagCarrierGuid\|GetHordeFlagCarrierGuid" src/` → no output.
+4. Start the stack and confirm mangosd reaches "World initialized" with no new errors, then `rndbot start` (or whatever the batch's standard smoke command is) and confirm bots log in — the generic smoke test.
+
+Optional human confirmation in-game, only worth doing if someone wants to see the WSG flag path still behaves (it is untouched code paths, `PlayerHasFlag`/`EnemyTeamHasFlag`, that this change sits next to):
+5. `.bg` a Warsong Gulch match with bots on both sides.
+6. Pick up the enemy flag as a human player and confirm bots still react as they did before this change — enemy bots converge on you (driven by `EnemyTeamHasFlag` / "enemy flag carrier", not by the three ported triggers).
+7. Let a bot pick up your flag and confirm it still runs for its own base (driven by `PlayerHasFlag`).
+Neither step should differ from a pre-change server; a difference there would mean the port touched more than intended.
+
+**Minor findings:**
+- src/modules/PlayerBots/playerbot/strategy/triggers/PvpTriggers.cpp: PlayerHasNoFlag still returns false when the bot is outside a battleground or in a non-WSG battleground, so the trigger named "player has no flag" is false precisely when the bot most obviously has no flag — the port faithfully preserves the dead code's inverted default, leaving the same silent never-fires trap outside WSG that the artifact set out to remove (its sibling PlayerIsInBattlegroundWithoutFlag correctly returns true in the non-WSG branch).
