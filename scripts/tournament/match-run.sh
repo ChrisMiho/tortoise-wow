@@ -327,6 +327,16 @@ assemble_queue() {
     printf '%s\n' "$inst"
 }
 
+# Mark bots.log HERE, not at the top of the script: everything above is roster
+# churn -- logging twenty bots out and twenty more in -- and that chatter is not
+# the match. The offset has to be the last thing taken before the players are
+# assembled, or the capture is padded with the previous pairing's logout trace.
+#
+# Non-fatal, like every artifact step in this script. A missing offset file
+# costs a bots-match.log; it must not cost a match that was actually played.
+"$HERE/bot-log-capture.sh" --mark "$RUN_DIR/bots.offset" >> "$RUN_DIR/match.log" 2>&1 \
+    || log "could not mark bots.log -- no bot log capture for this match"
+
 log "assembling (ASSEMBLE_MODE=$ASSEMBLE_MODE)"
 case "$ASSEMBLE_MODE" in
     direct) INST="$(assemble_direct)" || fatal "assembly failed" ;;
@@ -411,6 +421,48 @@ while :; do
 done
 
 DURATION=$(( $(date +%s) - START_TS ))
+
+# --- 6b. artifacts -----------------------------------------------------------
+# The evidence has to be collected NOW, between the result and the logout: the
+# next match's population gate starts by logging these twenty bots out, and
+# bots.log keeps growing the whole time (~87 MB/min measured 2026-08-18), so
+# every minute of delay is another minute of unrelated trace inside the capture
+# window -- and one more chance of crossing the 5-minute rotation that would
+# throw the older part of it away.
+#
+# EVERY LINE BELOW IS NON-FATAL. The match has already been played and decided;
+# a missing telemetry sample is a missing artifact, not a void result, and a
+# script that exited 1 here would tell the bracket driver the match never
+# happened. Failures are logged and dropped.
+if [ -x "$HERE/telemetry-extract.sh" ]; then
+    if "$HERE/telemetry-extract.sh" --instance "$INST" --out "$RUN_DIR/telemetry.csv" \
+            >> "$RUN_DIR/match.log" 2>&1; then
+        # telemetry-report.sh exits 1 when a bot is stuck or fewer than twenty
+        # entered. That is a finding about the bots, not a failure of this run --
+        # the report is written either way and the exit status is only logged.
+        if "$HERE/telemetry-report.sh" "$RUN_DIR/telemetry.csv" \
+                > "$RUN_DIR/telemetry-report.txt" 2>&1; then
+            log "telemetry report written to $RUN_DIR/telemetry-report.txt"
+        else
+            log "telemetry report flags a problem (stuck bots, or fewer than 20 entered) -- see $RUN_DIR/telemetry-report.txt"
+        fi
+    else
+        log "telemetry unavailable for instance $INST (is Tournament.TelemetryIntervalMs set, and was mangosd restarted after setting it?)"
+    fi
+else
+    # The extractor and the report ship separately from this file. Their absence
+    # is a "no telemetry today", not a broken match.
+    log "$HERE/telemetry-extract.sh is not present -- skipping telemetry artifacts"
+fi
+
+if [ -f "$RUN_DIR/bots.offset" ]; then
+    "$HERE/bot-log-capture.sh" --since "$RUN_DIR/bots.offset" \
+        --team "$ATEAM" --team "$HTEAM" --out "$RUN_DIR/bots-match.log" \
+        >> "$RUN_DIR/match.log" 2>&1 \
+        || log "bot log capture failed -- see $RUN_DIR/match.log"
+else
+    log "no bots.offset was recorded -- skipping bot log capture"
+fi
 
 # --- 7. log both teams out ---------------------------------------------------
 # The next match starts from a clean roster, or its own population gate fails.
