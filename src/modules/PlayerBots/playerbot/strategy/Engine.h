@@ -100,7 +100,9 @@ namespace ai
 
     protected:
         bool MultiplyAndPush(NextAction** actions, float forceRelevance, bool skipPrerequisites, const Event& event, const char* pushType);
-        void Reset();
+        // Returns false when the reset was deferred because a DoNextAction
+        // walk owns the queue right now; see the comment at Engine::Reset.
+        bool Reset();
         void ProcessTriggers(bool minimal);
         void PushDefaultActions();
         void PushAgain(ActionNode* actionNode, float relevance, const Event& event);
@@ -127,6 +129,11 @@ namespace ai
         ActionExecutionListeners actionExecutionListeners;
         BotState state;
         Action* lastExecutedAction;
+        // True while DoNextAction is walking `queue`. Reset() must not drain
+        // the queue in that window; it sets reinitPending instead and
+        // DoNextAction re-inits once the walk is over.
+        bool inDoNextAction = false;
+        bool reinitPending = false;
 
     public:
 		bool testMode;
