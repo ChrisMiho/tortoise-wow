@@ -2717,8 +2717,11 @@ bool BGTactics::Execute(Event& event)
     if (bg->GetStatus() == STATUS_IN_PROGRESS)
         ai->ChangeStrategy("-buff", BotState::BOT_STATE_NON_COMBAT);
 
-    std::vector<BattleBotPath*> const* vPaths;
-    std::vector<uint32> const* vFlagIds;
+    // Both stay null for any battleground type without a case below
+    // (BATTLEGROUND_BR and BATTLEGROUND_SV reach 'default: break'), and the AV
+    // case deliberately leaves vFlagIds null. Every use is null-guarded.
+    std::vector<BattleBotPath*> const* vPaths = nullptr;
+    std::vector<uint32> const* vFlagIds = nullptr;
 
     BattleGroundTypeId bgType = bg->GetTypeId();
 #ifdef MANGOSBOT_TWO
@@ -2792,6 +2795,10 @@ bool BGTactics::Execute(Event& event)
         if (bg->GetStatus() == STATUS_WAIT_JOIN)
             return false;
 
+        // no waypoint paths defined for this battleground type
+        if (!vPaths)
+            return false;
+
         if (useBuff())
             return true;
 
@@ -2838,7 +2845,7 @@ bool BGTactics::Execute(Event& event)
             case BATTLEGROUND_AV: return CheckFlagAv();
         }
 
-        if (vFlagIds)
+        if (vPaths && vFlagIds)
         {
             if (atFlag(*vPaths, *vFlagIds))
                 return true;
