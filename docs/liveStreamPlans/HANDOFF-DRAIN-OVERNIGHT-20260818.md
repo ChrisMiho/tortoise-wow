@@ -127,3 +127,49 @@ failed batch build. All of them report before stopping.
 DRIFT rather than PASS. That is correct behaviour, but it means the gate can
 only be run from the commit the image was built at — worth an artifact if it
 starts costing ticks.
+
+---
+
+## Correction from batch `20260818-8`: 055 is not the only thing blocking verification
+
+The batch's validation pass tried to run 046's in-game check for real and could
+not. **The gear gate was not what stopped it.** `wsg-kickoff.sh` does not go
+through `match-run.sh`, so 055 was never in the way on that path.
+
+What happened: all 20 bots queued — 90 `queued WSG` lines across all 20 distinct
+`Wsg*` bots in the marked window — and **no instance was ever created**. Zero
+references to map 489 or Warsong after the mark, and `bg.log` has had no new
+line since 2026-08-18 09:18 host time. The queue formed and never popped.
+
+Consequently every numeric criterion read zero for a trivial reason:
+`A:move to objective - OK` = 0, `PUSH:bg move to objective` = 0,
+`A:check flag` = 0, `S:-buff` = 0, AI ticks attributable to `Wsg*` bots = 0.
+**These zeroes are not evidence against the fix.** The before-numbers in the
+artifact (23,908 PUSHes, 98.8% empty ticks) come from a match that actually ran.
+Treat 046's criteria 3-5 as *unrun*, not failed. `BG-AI-ANALYSIS.md` §4.2a says
+so honestly rather than inventing after-numbers, which is the right state to
+ship.
+
+Two concrete blockers came out of it:
+
+1. **The queue funnel — 20 queued, no pop.** Upstream of 046 and looks like the
+   same territory as artifact **047**. This, not 055, is what has to be fixed
+   before any WSG-based verification works.
+2. **A stale `.wsg-mode-snapshot.json` dated 2026-08-10** made
+   `wsg-mode.sh status` report `MODE: wsg-match` while the world was actually in
+   alive-world mode, so `on` would have refused. `wsg-mode.sh on --force`
+   re-took the snapshot from live values and got past it.
+
+**Revised first pick:** 047 (the queue funnel) is now at least as good a first
+tick as 055 — it is what unblocks in-world verification for 046 and everything
+after it, and it is also what the drain would pick on its own. 055 remains
+necessary for the `match-run.sh` assembly path and the tournament flow; it is no
+longer the single gate it looked like.
+
+**State the batch left behind:** all conf changes reverted
+(`EnableActionLog` back to its commented default, `Tournament.TelemetryIntervalMs`
+back to 0), `wsg-mode.sh off` run, stack brought down with a plain
+`docker compose down` (never `-v`), `tortoise-wow-v2_dbdata` untouched. One
+deliberate difference from how it was found: `wsg-mode.sh off` deleted the stale
+snapshot, so the world is now in alive-world mode with **no** snapshot — the
+correct clean state, but a change.
