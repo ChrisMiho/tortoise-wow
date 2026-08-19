@@ -208,6 +208,159 @@ assert_eq "1" "$(grep -c 'effect=kill_team' <<< "$OUT3")" \
 assert_contains "$OUT3" "ratelimited=2" \
   "and the two over the cap are reported as rate limited, not skipped"
 
+# --- the consumer: bad caps, refusals, crash safety, two consumers ----------
+#
+# Each of these was a way to defeat one of the two guarantees above: the cap and
+# the dedupe. All five run against CTL_STUB, so no world stands up.
+
+q3="$(mktemp)"; st3="$(mktemp -d)"
+cat > "$st3/ctlstub.sh" <<'STUB'
+ctl() { printf 'TOURNAMENT %s ok=1\n' "$*"; }
+ctl_field() { printf '%s\n' "$1" | sed -n "s/.*[[:space:]]$2=\\([^[:space:]]*\\).*/\\1/p" | head -1; }
+STUB
+
+bash "$ROOT/scripts/tournament/effect-queue.sh" --queue "$q3" \
+     --effect kill_team --team orgrimmar-warsong >/dev/null
+
+# A cap override comes from the environment, which is where an operator typos
+# one. Unvalidated it does not merely misbehave -- `[ "$used" -ge abc ]` errors
+# and evaluates FALSE, so the cap stops biting entirely and every kill_team in
+# the queue lands. It has to be named and refused, not absorbed.
+BADLIM=0
+BADLIMOUT="$(CTL_STUB="$st3/ctlstub.sh" EFFECT_LIMIT_KILL_TEAM=abc \
+    bash "$ROOT/scripts/tournament/effect-consume.sh" --queue "$q3" \
+    --alliance stormwind-sentinels --horde orgrimmar-warsong \
+    --state "$st3" --once 2>&1)" || BADLIM=$?
+assert_eq "2|1|0" \
+  "$BADLIM|$(grep -c 'EFFECT_LIMIT_KILL_TEAM' <<< "$BADLIMOUT")|$(grep -c '^EFFECT ' <<< "$BADLIMOUT")" \
+  "EFFECT_LIMIT_KILL_TEAM=abc is refused by name and nothing is applied"
+
+# A team not in this match is refused by effect_targets and never reaches a bot,
+# so it must not spend cap. It used to: five stale queue lines naming a team
+# from another match exhausted kill_team's cap of 2 before a single legitimate
+# command landed.
+q4="$(mktemp)"; st4="$(mktemp -d)"
+cp "$st3/ctlstub.sh" "$st4/ctlstub.sh"
+for i in 1 2 3 4 5; do
+  bash "$ROOT/scripts/tournament/effect-queue.sh" --queue "$q4" \
+       --effect kill_team --team ironforge-anvils >/dev/null
+done
+for i in 1 2; do
+  bash "$ROOT/scripts/tournament/effect-queue.sh" --queue "$q4" \
+       --effect kill_team --team orgrimmar-warsong >/dev/null
+done
+OUT4="$(CTL_STUB="$st4/ctlstub.sh" bash "$ROOT/scripts/tournament/effect-consume.sh" \
+        --queue "$q4" --alliance stormwind-sentinels --horde orgrimmar-warsong \
+        --state "$st4" --once 2>&1)"
+assert_eq "2|0" \
+  "$(grep -c 'effect=kill_team team=orgrimmar-warsong' <<< "$OUT4")|$(grep -c 'ratelimited=[1-9]' <<< "$OUT4")" \
+  "five refused kill_team leave the default cap of 2 intact for the real ones"
+
+assert_eq "2" "$(grep -cxF kill_team "$st4/counts.txt")" \
+  "and only the two that actually landed are counted against the cap"
+
+# The mirror of the case above, and the one that matters more: a wipe that
+# landed on NINE of ten bots because the tenth logged out. effect_apply returns
+# 1 for that -- its rc is all-or-nothing -- so keying the count on the rc made
+# every partial wipe free. In game: nine Horde bots dead, five times over, with
+# kill_team's cap of 2 never engaging. The count keys on "at least one target
+# landed" instead, which is the applied=<n> on effect_apply's own EFFECT line.
+q7="$(mktemp)"; st7="$(mktemp -d)"
+cat > "$st7/ctlstub.sh" <<'STUB'
+ctl() {
+    case "$*" in
+        *one) printf 'TOURNAMENT %s ok=0 reason=offline\n' "$*" ;;
+        *)    printf 'TOURNAMENT %s ok=1\n' "$*" ;;
+    esac
+}
+ctl_field() { printf '%s\n' "$1" | sed -n "s/.*[[:space:]]$2=\\([^[:space:]]*\\).*/\\1/p" | head -1; }
+STUB
+for i in 1 2 3 4 5; do
+  bash "$ROOT/scripts/tournament/effect-queue.sh" --queue "$q7" \
+       --effect kill_team --team orgrimmar-warsong >/dev/null
+done
+OUT7="$(CTL_STUB="$st7/ctlstub.sh" bash "$ROOT/scripts/tournament/effect-consume.sh" \
+        --queue "$q7" --alliance stormwind-sentinels --horde orgrimmar-warsong \
+        --state "$st7" --once 2>&1)"
+assert_eq "2|2|ratelimited=3" \
+  "$(grep -c 'applied=9 failed=1' <<< "$OUT7")|$(grep -cxF kill_team "$st7/counts.txt")|$(sed -n 's/^CONSUME .*\(ratelimited=[0-9]*\).*/\1/p' <<< "$OUT7")" \
+  "a wipe that landed on nine of ten bots spends cap: the third is rate limited"
+
+# A consumer killed partway through a kill_team's ten ctl calls. The id used to
+# be appended only after effect_apply returned, so the next pass replayed the
+# whole wipe -- ten bots killed twice off one purchase.
+q5="$(mktemp)"; st5="$(mktemp -d)"
+cat > "$st5/ctlstub.sh" <<'STUB'
+ctl() {
+    n=$(cat "$CTL_COUNT" 2>/dev/null || echo 0); n=$((n + 1))
+    printf '%s\n' "$n" > "$CTL_COUNT"
+    [ "$n" -lt 4 ] || kill -9 $$
+    printf 'TOURNAMENT %s ok=1\n' "$*"
+}
+ctl_field() { printf '%s\n' "$1" | sed -n "s/.*[[:space:]]$2=\\([^[:space:]]*\\).*/\\1/p" | head -1; }
+STUB
+id5="$(bash "$ROOT/scripts/tournament/effect-queue.sh" --queue "$q5" \
+        --effect kill_team --team orgrimmar-warsong)"
+# The SIGKILL is deliberate -- it is the whole point of the case -- so the
+# "Killed" notice this shell prints when it reaps the subshell is expected
+# output, not a failure. The subshell keeps the consumer's own output quiet.
+( CTL_COUNT="$st5/ctl.count" CTL_STUB="$st5/ctlstub.sh" \
+  bash "$ROOT/scripts/tournament/effect-consume.sh" --queue "$q5" \
+  --alliance stormwind-sentinels --horde orgrimmar-warsong \
+  --state "$st5" --once ) >/dev/null 2>&1
+
+assert_eq "1" "$(grep -cxF -- "$id5" "$st5/applied.txt" 2>/dev/null)" \
+  "an id is claimed BEFORE the first ctl call, so a kill cut short is still recorded"
+
+OUT5="$(CTL_STUB="$st3/ctlstub.sh" bash "$ROOT/scripts/tournament/effect-consume.sh" \
+        --queue "$q5" --alliance stormwind-sentinels --horde orgrimmar-warsong \
+        --state "$st5" --once 2>&1)"
+assert_eq "0" "$(grep -c '^EFFECT ' <<< "$OUT5")" \
+  "and the pass after the crash does not replay the interrupted wipe"
+
+# Two consumers on one --state dir: an operator restarting the loop without
+# killing the old one. Unlocked, both read applied.txt before either appends to
+# it, both miss the id, and both wipe the same team. The stub logs every ctl
+# call and sleeps, so the window the two overlap in is wide, not theoretical.
+q6="$(mktemp)"; st6="$(mktemp -d)"
+cat > "$st6/ctlstub.sh" <<'STUB'
+ctl() { printf '%s\n' "$*" >> "$CTL_LOG"; sleep 0.05; printf 'TOURNAMENT %s ok=1\n' "$*"; }
+ctl_field() { printf '%s\n' "$1" | sed -n "s/.*[[:space:]]$2=\\([^[:space:]]*\\).*/\\1/p" | head -1; }
+STUB
+: > "$st6/ctl.log"
+bash "$ROOT/scripts/tournament/effect-queue.sh" --queue "$q6" \
+     --effect kill_team --team orgrimmar-warsong >/dev/null
+for i in 1 2; do
+  CTL_LOG="$st6/ctl.log" CTL_STUB="$st6/ctlstub.sh" \
+      bash "$ROOT/scripts/tournament/effect-consume.sh" --queue "$q6" \
+      --alliance stormwind-sentinels --horde orgrimmar-warsong \
+      --state "$st6" --once >/dev/null 2>&1 &
+done
+wait
+assert_eq "10|1" \
+  "$(wc -l < "$st6/ctl.log" | tr -d ' ')|$(wc -l < "$st6/applied.txt" | tr -d ' ')" \
+  "two consumers on one state dir apply the kill exactly once: ten ctl calls, one id"
+
+# A value-taking flag as the final argument used to spin the argument loop
+# forever -- `shift 2` cannot shift with one argument left, so $# never
+# decreased. rc=124 below is `timeout` killing a hung script, which is the bug;
+# rc=2 is the script saying it was called wrong, which is the fix.
+CRC=0
+timeout 10 bash "$ROOT/scripts/tournament/effect-consume.sh" \
+    --queue /dev/null --alliance stormwind-sentinels --horde orgrimmar-warsong \
+    --state "$st6" --interval >/dev/null 2>&1 || CRC=$?
+assert_eq "2" "$CRC" \
+  "effect-consume.sh exits 2 on a trailing valueless flag instead of spinning"
+
+QRC=0
+timeout 10 bash "$ROOT/scripts/tournament/effect-queue.sh" \
+    --queue "$q6" --effect heal_team --team stormwind-sentinels --source \
+    >/dev/null 2>&1 || QRC=$?
+assert_eq "2" "$QRC" \
+  "effect-queue.sh exits 2 on a trailing valueless flag instead of spinning"
+
+rm -rf "$q3" "$st3" "$q4" "$st4" "$q5" "$st5" "$q6" "$st6"
+
 rm -rf "$q2" "$st"
 
 assert_summary
