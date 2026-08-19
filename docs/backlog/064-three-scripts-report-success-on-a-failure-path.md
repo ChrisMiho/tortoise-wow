@@ -1,5 +1,5 @@
 ---
-status: implemented
+status: done
 risk: low
 area: tournament/telemetry
 depends-on: 029-bot-log-capture-and-match-artifacts.md
@@ -72,3 +72,5 @@ Needs a live world, one 20-minute ad-hoc match (`scripts/tournament/match-run.sh
 - scripts/tournament/telemetry-extract.sh: telemetry-extract.sh only removes a pre-existing $OUT on the no-samples path, so its exit-2 paths (missing bg.log, awk/sort failure) still leave a previous match's telemetry.csv sitting in the shared logs/tournament/adhoc run dir while match-run.sh logs "telemetry unavailable" — the same stale-artifact shape the diff fixes for bots.offset.
 - scripts/tournament/bot-log-capture.sh: In capture_from, `rc=$?` after the pipeline still conflates a tail failure (deleted or unreadable bots.log mid-run, status 1 under pipefail) with grep's legitimate "no lines matched", so a failed read is reported as a clean "captured 0 line(s)" and exit 0 — the redirection case is now covered but the read case is not.
 - scripts/tournament/match-run.sh: The new unconditional `rm -f "$RUN_DIR/bots.offset"` at startup mutates a run dir the diff's own comment calls SHARED by every ad-hoc match, so a second match-run launched while a first is still playing deletes the first run's offset and the first run then silently takes the "no offset file" skip branch instead of capturing its bot log — there is no lock or per-run dir guarding it.
+
+**Result:** PR opened at https://github.com/ChrisMiho/tortoise-wow/pull/78, build tortoise-cm:20260819-5.

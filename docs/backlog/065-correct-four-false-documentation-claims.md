@@ -1,5 +1,5 @@
 ---
-status: implemented
+status: done
 risk: low
 area: docs/tournament
 depends-on: 040-streaming-feasibility-assessment.md
@@ -67,3 +67,5 @@ Nothing here requires logging into the world. If anyone wants a live sanity pass
 **Minor findings:**
 - docs/playerbots/wsg/wsg-mode.sh: The new header says the compiled fallback was "raised from 200 to 1000", but PlayerbotAIConfig.cpp's own comment records the previous values as 50 (min) and 200 (max), so the single "200" misdescribes the min default in a comment whose whole purpose is doc accuracy.
 - docs/playerbots/wsg/wsg-mode.sh: Twelve lines below the edited block, the RandomBotTimedLogout comment still cites `PlayerbotAIConfig.cpp:254` when that call is at line 265 (254 is a bare `//`) — the same class of stale file reference this artifact corrects, left in place inside the touched region.
+
+**Result:** PR opened at https://github.com/ChrisMiho/tortoise-wow/pull/79, build tortoise-cm:20260819-5.

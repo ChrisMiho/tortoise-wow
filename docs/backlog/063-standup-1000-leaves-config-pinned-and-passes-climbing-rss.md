@@ -1,5 +1,5 @@
 ---
-status: implemented
+status: done
 risk: medium
 area: ops/standup
 depends-on: 044-standup-1000-script.md
@@ -58,3 +58,5 @@ One thing a human should eyeball after any real (non-stubbed) run: `AiPlayerbot.
 - scripts/standup-1000.sh: `restore_conf` unconditionally logs "mangosd keeps target=$TARGET until its next restart", which is false on the failure paths that exit before the restart (`conf_min_random_bots_not_set_mangosd_not_restarted`, `mangosd_restart_failed`), telling the operator the live world is pinned at the new target when it never was.
 - scripts/standup-1000.sh: The lock-refusal message reads `head -1 "$LOCK_FILE"`, but the file is opened append-only (`exec 9>>`) and never truncated, so it reports the pid/out-dir of the first run that ever took the lock instead of the run currently holding it.
 - scripts/standup-1000.sh: The flock only excludes other invocations of this script, while scripts/bot-ramp.sh and scripts/task3-ramp-step.sh `sed -i` the same live etc/aiplayerbot.conf and restart mangosd without taking it, so a concurrent ramp can still race the pool target and have its edit silently overwritten by this script's EXIT-trap restore.
+
+**Result:** PR opened at https://github.com/ChrisMiho/tortoise-wow/pull/77, build tortoise-cm:20260819-5.

@@ -1,5 +1,5 @@
 ---
-status: implemented
+status: done
 risk: high
 area: playerbots/engine
 depends-on: 046-wsg-bots-never-execute-bg-move-to-objective.md
@@ -101,3 +101,5 @@ MANUAL / WSG-DEPENDENT (blocked on artifact 055's gear gate, which makes `match-
 - src/modules/PlayerBots/playerbot/strategy/Engine.cpp: `~Engine()` still calls `Reset()` and discards the new bool, but the destructor is the one caller that can never honour the "DoNextAction will replay it" contract — if an engine is ever destroyed with `inDoNextAction` still set, Reset() takes the deferral branch, logs through a half-torn-down `ai`, and silently leaks the whole queue, triggers and multipliers instead of freeing them.
 - src/modules/PlayerBots/playerbot/strategy/Engine.cpp: `inDoNextAction` is set and restored by hand across the ~230-line body of `DoNextAction` with no RAII guard, so any future early `return` (or an exception escaping `ListenAndExecute` — nothing in `PlayerbotAI::UpdateAIInternal`/`World::UpdatePlayerbotsTick` catches one) leaves the flag stuck true for that bot's engine forever, after which every `Reset()`/`Init()` silently defers and the engine never rebuilds its triggers again.
 - src/modules/PlayerBots/playerbot/strategy/ReactionEngine.cpp: The new deferral contract covers only `Engine::DoNextAction`; `ReactionEngine::FindReaction` walks the same `queue` with the same Peek/Pop pattern without ever setting `inDoNextAction`, so a strategy change reaching the reaction engine during that walk still drains the queue underneath it — and that walk additionally binds `const Event& reactionEvent` into the basket that `queue.Pop(reactionItem)` then deletes and reads it afterwards, which is exactly the use-after-free shape the artifact set out to close.
+
+**Result:** PR opened at https://github.com/ChrisMiho/tortoise-wow/pull/80, build tortoise-cm:20260819-5.
