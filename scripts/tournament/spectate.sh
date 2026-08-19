@@ -40,7 +40,10 @@
 # for a reason that wants looking at (an unexpected error, or the time budget).
 # Either way the last line on stdout is the SPECTATE summary.
 #
-# Run from WSL: jq is not on Git Bash's PATH on this host.
+# Run from WSL. `ctl()` sends every console command through `wsg_console`, which
+# wraps `docker attach` in util-linux `script` for a pty
+# (docs/playerbots/wsg/lib/wsg-bots-common.sh:106); Git Bash ships no `script`,
+# so the whole pipeline dies on the first cut.
 set -uo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$HERE/../.." && pwd)"
