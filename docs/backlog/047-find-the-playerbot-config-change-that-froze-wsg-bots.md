@@ -1,5 +1,5 @@
 ---
-status: implemented
+status: done
 risk: low
 area: playerbots/config
 depends-on:
@@ -113,3 +113,5 @@ What a human *can* confirm, and most of it is scriptable rather than visual:
 - docs/playerbots/BG-AI-ANALYSIS.md: §4.6 concludes the regression is "not in aiplayerbot.conf", but the single round was run on `tortoise-cm:20260818-2`, an image that still carries the `Engine::ChangeStrategy` → `Init()` → `Reset()` queue wipe (fixed only in 74d2ace) which by §4.2a freezes every bot regardless of config — so the 2026-08-09 config is confounded/untested rather than exonerated, and the section should say the config question can only be reopened on a post-fix build.
 - docs/playerbots/BG-AI-ANALYSIS.md: The Result row's headline "0 of 20 bots with `distance > 100`" does not say which extraction it came from, even though the same section warns that the run directory's `telemetry.csv` (and any `--instance`-only extract) interleaves 2026-08-18's instance 101 and invents `distance=16080.3`, leaving the one load-bearing number in the record untraceable to a time-sliced `bg.log`.
 - docs/playerbots/BG-AI-ANALYSIS.md: The Result row states "0 of 20 bots ... in either match" while its own Matches row records only 19 bots entering the first match and 39 total bot-slots, so the denominator in the pass/fail statement contradicts the run it is describing.
+
+**Result:** PR opened at https://github.com/ChrisMiho/tortoise-wow/pull/61, build tortoise-cm:20260819-1.

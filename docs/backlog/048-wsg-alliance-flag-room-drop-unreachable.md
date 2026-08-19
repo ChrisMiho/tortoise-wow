@@ -1,5 +1,5 @@
 ---
-status: implemented
+status: done
 risk: low
 area: playerbots/battlegrounds
 depends-on:
@@ -76,3 +76,5 @@ Beyond that, the generic smoke test applies: the server starts, bots spawn, no n
 
 **Minor findings:**
 - src/modules/PlayerBots/playerbot/strategy/actions/BattleGroundTactics.cpp: The Alliance arm's waypoint `WS_FLAG_ALLIANCE_FLOOR_JUMP_UPPER` sits at y = 1468.0, exactly on (not inside) the arm's guard `GetPositionY() < 1468.f`, so a bot that actually arrives at or slightly overshoots the lip falls out of `atAllianceSecondFloorJump` entirely and stalls without jumping — whereas the Horde mirror's `_UPPER` at y = 1451 lies strictly inside its `y > 1450` guard and therefore always re-enters the else branch; the new 1466 test only saves the bot if it happens to be re-evaluated while still in the 1466–1468 band.
+
+**Result:** PR opened at https://github.com/ChrisMiho/tortoise-wow/pull/62, build tortoise-cm:20260819-1.

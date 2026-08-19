@@ -1,5 +1,5 @@
 ---
-status: implemented
+status: done
 risk: low
 area: playerbots/battlegrounds
 depends-on:
@@ -57,3 +57,5 @@ in `bg.log` — it is a straightforward control-flow bug on its own.
 5. Repeat with a Horde bot heading east to confirm the mirror route is unchanged — Horde tunnel bots should behave exactly as before.
 
 Scriptable portion: no dedicated log line exists for wsgPaths branch selection, so this cannot be fully asserted from logs. What a later automated step CAN confirm without a human watching: (a) the server starts and a WSG match runs to completion with no new errors or crashes in `mangosd`/`bg.log`; (b) Alliance bot position samples taken during a match include coordinates inside the tunnel corridor (x between 1130 and 1380, z near 315-330) rather than exclusively mid-field values — sampling bot positions via console `.gps` on a followed bot, or via the existing wsg telemetry scripts under `docs/playerbots/wsg/`, would show tunnel traversal is happening at all on the Alliance side. The per-bot branch verification in steps 3-4 needs a human in-game.
+
+**Result:** PR opened at https://github.com/ChrisMiho/tortoise-wow/pull/63, build tortoise-cm:20260819-1.

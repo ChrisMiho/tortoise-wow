@@ -1,5 +1,5 @@
 ---
-status: implemented
+status: done
 risk: low
 area: playerbots/battlegrounds
 depends-on:
@@ -75,3 +75,5 @@ Scriptable / log-observable:
 
 Manual, only if someone wants to confirm the intent by hand:
 4. Watch a WSG match as a GM (`.gm on`, `.go` to the WSG flag rooms). Bots should behave exactly as before this change — the flag carrier crosses the field with no dedicated escort, and non-carrier bots keep pushing to objectives rather than trailing the carrier. Any bot suddenly Follow()-ing its own flag carrier would mean the node got re-enabled by mistake.
+
+**Result:** PR opened at https://github.com/ChrisMiho/tortoise-wow/pull/64, build tortoise-cm:20260819-1.
