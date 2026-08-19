@@ -1,5 +1,5 @@
 ---
-status: implemented
+status: done
 risk: medium
 area: game/tournament
 depends-on: 038-tournament-poi-and-camera-commands.md
@@ -63,3 +63,5 @@ those rather than inventing new ones.
 
 **Minor findings:**
 - src/game/Commands/TournamentCommands.cpp: `Player::TeleportTo` returns true as soon as a far teleport is *scheduled* (`sMapMgr.ScheduleFarTeleport`), and `MapManager::ExecuteSingleDelayedTeleport` silently swallows a later `ExecuteTeleportFar` failure, so a camera cut whose port never starts still emits `moved=1` and keeps the freshly-written `m_bgData` (bgInstanceID + joinPos, `m_needSave=true`) with no rollback — the exact persistent `already_in_a_battleground` state the artifact targets; `tournament add` closes this with a post-send `IsBeingTeleported()` check that the camera handler does not mirror.
+
+**Result:** PR opened at https://github.com/ChrisMiho/tortoise-wow/pull/70, build tortoise-cm:20260819-3.

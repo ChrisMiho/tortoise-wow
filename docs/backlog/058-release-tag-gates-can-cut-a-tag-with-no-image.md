@@ -1,5 +1,5 @@
 ---
-status: implemented
+status: done
 risk: low
 area: ops/release
 depends-on: 045-release-tag-script-and-record.md
@@ -59,3 +59,5 @@ When a real release is next cut for real (a human action, not part of validation
 
 **Minor findings:**
 - tests/release-tag.test.sh: The `run_release 0 '-v1'` case never reaches the new docker-name regex — the script's argument loop matches `-*` first and exits 2 with "unknown arg: -v1", so the assertion passes on the wrong code path and the regex's leading-'-' rejection stays untested (a leading '.' is genuinely covered).
+
+**Result:** PR opened at https://github.com/ChrisMiho/tortoise-wow/pull/72, build tortoise-cm:20260819-3.

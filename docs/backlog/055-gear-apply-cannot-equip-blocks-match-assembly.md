@@ -1,5 +1,5 @@
 ---
-status: implemented
+status: done
 risk: medium
 area: tournament/gear
 depends-on: 031-gear-tier-armour-weapon-split.md
@@ -70,3 +70,5 @@ Needs a human in the client (one login, two minutes): join the instance as a spe
 - src/game/Commands/TournamentCommands.cpp: The `MaxCount > 0` cleanup destroys the bot's existing copies of a unique item before `CanEquipNewItem` is consulted, so if the equip then fails for any other reason (level, a race/class restriction in a hand-curated tier) the bot ends up with an empty slot where the previous code left the old item in place.
 - src/game/Commands/TournamentCommands.cpp: Fist weapons are granted SKILL_FIST_WEAPONS so CanUseItem passes and the item equips, but combat rolls read the item's GetProficiencySkill() which is SKILL_UNARMED for subclass 13 (Item.cpp:658-661, Object.cpp:3653, Player.cpp:22076) — a skill this code never grants, so a bot handed a fist weapon can equip it and then swing at whatever unarmed value it happens to have, which is exactly the missing-all-match outcome the 5*level grant was written to prevent.
 - src/game/Commands/TournamentCommands.cpp: The new MaxCount>0 branch destroys every copy of the item (equipped, bags and bank) before CanEquipNewItem is consulted, so any pick that fails the subsequent check — level, class, or a prototype that Item::CreateItem cannot build — leaves the bot stripped of the item it was already wearing and reports only cannot_equip/equip_failed, with no path back to the previous tier's kit.
+
+**Result:** PR opened at https://github.com/ChrisMiho/tortoise-wow/pull/69, build tortoise-cm:20260819-3.

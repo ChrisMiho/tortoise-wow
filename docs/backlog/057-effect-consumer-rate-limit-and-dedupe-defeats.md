@@ -1,5 +1,5 @@
 ---
-status: implemented
+status: done
 risk: low
 area: tournament/effects
 depends-on: 034-viewer-effect-consumer.md
@@ -78,3 +78,5 @@ Steps 4-7 are all confirmable from `counts.txt`, `applied.txt` and the consumer'
 - scripts/tournament/effect-consume.sh: lock_hold() discards flock's exit status and always returns 0, so a failed lock acquisition silently proceeds into the claim/apply/cap section unlocked -- the double-apply this change exists to prevent, with no diagnostic.
 - scripts/tournament/effect-consume.sh: flock is taken with no -w timeout while the lock is held across effect_apply's ten console round trips, so one stalled wsg_console attach parks the per-match lock indefinitely and a second consumer blocks inside flock 9 forever with no output.
 - scripts/tournament/effect-consume.sh: fd 9 is inherited by every child effect_apply spawns, so a console child that outlives a killed consumer keeps the lock's open file description alive and stalls the restarted consumer the design explicitly anticipates.
+
+**Result:** PR opened at https://github.com/ChrisMiho/tortoise-wow/pull/71, build tortoise-cm:20260819-3.
