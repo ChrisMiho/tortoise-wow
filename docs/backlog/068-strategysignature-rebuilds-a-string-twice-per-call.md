@@ -1,5 +1,5 @@
 ---
-status: implemented
+status: done
 risk: low
 area: playerbots/engine
 depends-on: 046-wsg-bots-never-execute-bg-move-to-objective.md
@@ -67,3 +67,5 @@ set), or a dirty flag set by `addStrategy`/`removeStrategy` and cleared by
 4. Scriptable log check B — the guard still fires as a no-op: grep for `S:-buff` and count occurrences per bot. It must appear roughly once per bot near match start, not once per bot per tick. A per-tick count means the token comparison is reporting a change where the string comparison did not, i.e. the hash bookkeeping is out of sync with the map.
 5. Scriptable log check C — a real change still re-inits: pick one bot and confirm its log shows an `S:+...` / `S:-...` pair for an actual strategy transition (e.g. entering combat) followed by fresh `PUSH:` lines for that state, proving `Init()` still runs exactly once when the set really moves.
 6. Optional, human/console: `.bot strategy` (PrintStrategies) on a bot before and after `.bot co -buff` style toggles should list the same strategies it always did — the token affects only whether Init() runs, never the listed set. Note rule 5 of the drain: the only server image on this host predates these changes, so any of this must run against a freshly built image, not the rollback anchor.
+
+**Result:** PR opened at https://github.com/ChrisMiho/tortoise-wow/pull/81, build tortoise-cm:20260819-6.
