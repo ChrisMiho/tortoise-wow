@@ -1,5 +1,5 @@
 ---
-status: pending
+status: done
 risk: low
 area: tournament/spectate
 depends-on: 039-spectator-director-loop.md

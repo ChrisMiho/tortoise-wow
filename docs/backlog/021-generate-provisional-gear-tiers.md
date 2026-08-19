@@ -1,5 +1,5 @@
 ---
-status: pending
+status: done
 risk: low
 area: tournament/gear
 depends-on: 020-gear-tier-library-and-generators.md

@@ -1,5 +1,5 @@
 ---
-status: pending
+status: done
 risk: medium
 area: tournament/effects
 depends-on: 029-bot-log-capture-and-match-artifacts.md

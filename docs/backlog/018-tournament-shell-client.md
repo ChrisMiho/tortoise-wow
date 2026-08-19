@@ -1,5 +1,5 @@
 ---
-status: pending
+status: done
 risk: low
 area: tournament/control-plane
 depends-on:

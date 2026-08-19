@@ -1,5 +1,5 @@
 ---
-status: pending
+status: done
 risk: high
 area: game/commands
 depends-on: 017-tournament-equip-and-store-commands.md

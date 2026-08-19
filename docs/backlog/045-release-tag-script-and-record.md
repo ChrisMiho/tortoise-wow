@@ -1,5 +1,5 @@
 ---
-status: pending
+status: done
 risk: medium
 area: ops/release
 depends-on:

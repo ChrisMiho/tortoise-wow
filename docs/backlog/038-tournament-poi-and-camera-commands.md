@@ -1,5 +1,5 @@
 ---
-status: pending
+status: done
 risk: high
 area: game/commands
 depends-on: 030-tournament-heal-and-kill-commands.md

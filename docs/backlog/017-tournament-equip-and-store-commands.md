@@ -1,5 +1,5 @@
 ---
-status: pending
+status: done
 risk: medium
 area: game/commands
 depends-on: 016-tournament-instance-lifecycle-commands.md

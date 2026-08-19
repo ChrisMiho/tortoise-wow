@@ -1,5 +1,5 @@
 ---
-status: pending
+status: done
 risk: medium
 area: tournament/rosters
 depends-on: 013-tournament-team-definitions.md

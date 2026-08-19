@@ -1,5 +1,5 @@
 ---
-status: pending
+status: done
 risk: medium
 area: tournament/effects
 depends-on: 033-viewer-effect-queue.md

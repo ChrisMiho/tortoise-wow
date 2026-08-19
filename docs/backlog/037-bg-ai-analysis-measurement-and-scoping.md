@@ -1,5 +1,5 @@
 ---
-status: pending
+status: done
 risk: low
 area: playerbots/battlegrounds
 depends-on: 036-bg-ai-analysis-code-reading.md
