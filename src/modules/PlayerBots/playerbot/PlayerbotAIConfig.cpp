@@ -246,8 +246,19 @@ bool PlayerbotAIConfig::Initialize()
     botAutologin = BotAutoLogin(config.GetIntDefault("AiPlayerbot.BotAutologin", 0));
     randomBotAutologin = config.GetBoolDefault("AiPlayerbot.RandomBotAutologin", true);
     randomBotAutoCreate = config.GetBoolDefault("AiPlayerbot.RandomBotAutoCreate", true);
-    minRandomBots = config.GetIntDefault("AiPlayerbot.MinRandomBots", 50);
-    maxRandomBots = config.GetIntDefault("AiPlayerbot.MaxRandomBots", 200);
+    // These fallbacks apply only when the key is absent from the conf, and they
+    // now agree with aiplayerbot.conf.dist.in:57-58, which has shipped
+    // MinRandomBots = MaxRandomBots = 1000 all along. They previously read 50 and
+    // 200, so a conf omitting these keys ran at a fifth of the population the
+    // project's own template asks for, with nothing anywhere indicating why.
+    //
+    // 1000 is measured-safe on the reference host: 4.2682 GiB RSS at 1017 bots
+    // online, plateaued, with the VM still reporting 17.62 GiB available. The ramp
+    // did not trip a gate until 2002 bots, and then on Windows host-free memory
+    // rather than the VM. Measurements:
+    // docs/superpowers/plans/2026-08-16-09-release-tag-and-1000-bot-standup.md.
+    minRandomBots = config.GetIntDefault("AiPlayerbot.MinRandomBots", 1000);
+    maxRandomBots = config.GetIntDefault("AiPlayerbot.MaxRandomBots", 1000);
     randomBotUpdateInterval = config.GetIntDefault("AiPlayerbot.RandomBotUpdateInterval", 1 * 1000);
     randomBotCountChangeMinInterval = config.GetIntDefault("AiPlayerbot.RandomBotCountChangeMinInterval", 1 * 1800);
     randomBotCountChangeMaxInterval = config.GetIntDefault("AiPlayerbot.RandomBotCountChangeMaxInterval", 2 * 3600);
@@ -539,7 +550,12 @@ bool PlayerbotAIConfig::Initialize()
     }
 
     randomBotAccountPrefix = config.GetStringDefault("AiPlayerbot.RandomBotAccountPrefix", "rndbot");
-    randomBotAccountCount = config.GetIntDefault("AiPlayerbot.RandomBotAccountCount", 50);
+    // Agrees with aiplayerbot.conf.dist.in:64, which has shipped 500 all along. A
+    // bot account holds at most 9-10 characters (PlayerbotMgr.cpp:2325), so the
+    // 1000-bot default needs at least 100-112 accounts and the old fallback of 50
+    // could not hold that population at all; 500 is the minimum coherent value
+    // that matches the shipped conf.
+    randomBotAccountCount = config.GetIntDefault("AiPlayerbot.RandomBotAccountCount", 500);
     deleteRandomBotAccounts = config.GetBoolDefault("AiPlayerbot.DeleteRandomBotAccounts", false);
     randomBotGuildCount = config.GetIntDefault("AiPlayerbot.RandomBotGuildCount", 20);
     deleteRandomBotGuilds = config.GetBoolDefault("AiPlayerbot.DeleteRandomBotGuilds", false);
