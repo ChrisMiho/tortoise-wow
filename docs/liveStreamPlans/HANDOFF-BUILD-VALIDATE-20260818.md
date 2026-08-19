@@ -154,3 +154,32 @@ lines) was deliberately excluded from `#57` and remains only on
 - **`gh pr view --json mergeable` returns `UNKNOWN`** for several seconds after
   the base branch moves. Poll until it resolves; treating `UNKNOWN` as
   not-mergeable skips PRs that are fine.
+
+---
+
+## Outcome — executed 18 Aug
+
+**Build:** `BUILD_JOBS=14 ./scripts/rebuild.sh` from WSL, foreground. Compile
+489 s, well inside the ceiling. All five acceptance checks passed — `mangosd`
+and `realmd` exist and link cleanly, playerbots compiled in, both extractors
+present.
+
+**Image tag:** `tortoise-cm:eed1053`, image ID
+`ccef0e322fbdb7002ab058b04af2fe36e435d98fd84f62c1cd147396b55a9c53`
+(`ccef0e322fbd`), promoted to `tortoise-cm:local`. Built from `cm-main` at
+`eed1053`, clean tree. Rollback anchor `c06b2fb` untouched.
+
+**Validation:** `VALIDATE-STACK: PASS` — provenance `eed1053 == HEAD`, identity
+matched, realm `8095:0`, 775 characters online.
+
+**The first validation run failed, and it was the harness, not the image.**
+`VALIDATE-STACK: FAIL LIVENESS — no characters came online within 300s`.
+`prov_world_ready` probed the world port from the host, where Docker's proxy
+binds it at container start; the host probe passed at t=6s while mangosd only
+listened at t=57s, so the 300s bot window started against a still-loading world.
+On the first boot off a freshly built 2.3 GiB image that overran the window.
+Bots were never the problem — a cold-boot reproduction had 717 online at the
+first poll after the world opened, plateauing at 1017. Fixed as artifact **066**;
+`scripts/standup-1000.sh` had the same false-ready.
+
+**Not done, deliberately:** no WSG match (invariant 4), no drain run.
