@@ -1,5 +1,5 @@
 ---
-status: implemented
+status: done
 risk: medium
 area: playerbots/battlegrounds
 depends-on:
@@ -73,3 +73,5 @@ Scriptable / log-observable (a later batch step can do this unattended):
 Manual, requires a human eye:
 4. Log in as a GM, `.go` into the running WSG instance, and confirm bots still run the flag: Horde bots leave the Warsong tunnel, path to the Silverwing flag room, pick up the flag, and carry it back. Same spot-check in AB (bots fan out to capture Stables/Blacksmith/etc.) and AV (bots move up the field and cap towers) — AV is the one worth checking specifically, since it is the case that assigns `vPaths` but leaves `vFlagIds` null and therefore exercises the widened `vPaths && vFlagIds` test.
 5. Blood Ring / SV (maps 26, 27) cannot be used to confirm the fix positively: `AiFactory.cpp:1106` still withholds the `battleground` strategy for those type ids, so bots there remain inert exactly as before. Confirming "bots stand around in Blood Ring and the server does not crash" is the expected outcome both before and after this commit — it proves nothing, and no one should chase it.
+
+**Result:** PR opened at https://github.com/ChrisMiho/tortoise-wow/pull/66, build tortoise-cm:20260819-2.

@@ -1,5 +1,5 @@
 ---
-status: implemented
+status: done
 risk: low
 area: playerbots/battlegrounds
 depends-on:
@@ -76,3 +76,5 @@ Neither step should differ from a pre-change server; a difference there would me
 
 **Minor findings:**
 - src/modules/PlayerBots/playerbot/strategy/triggers/PvpTriggers.cpp: PlayerHasNoFlag still returns false when the bot is outside a battleground or in a non-WSG battleground, so the trigger named "player has no flag" is false precisely when the bot most obviously has no flag — the port faithfully preserves the dead code's inverted default, leaving the same silent never-fires trap outside WSG that the artifact set out to remove (its sibling PlayerIsInBattlegroundWithoutFlag correctly returns true in the non-WSG branch).
+
+**Result:** PR opened at https://github.com/ChrisMiho/tortoise-wow/pull/65, build tortoise-cm:20260819-2.

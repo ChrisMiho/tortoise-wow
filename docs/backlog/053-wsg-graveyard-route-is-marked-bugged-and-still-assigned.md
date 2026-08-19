@@ -1,5 +1,5 @@
 ---
-status: implemented
+status: done
 risk: medium
 area: playerbots/battlegrounds
 depends-on: 046-wsg-bots-never-execute-bg-move-to-objective.md
@@ -76,3 +76,5 @@ A human watching in-game would only be needed to confirm the visual claim behind
 - docs/playerbots/BG-AI-ANALYSIS.md: The comment insertions shift every line in BattleGroundTactics.cpp after :2326 by +4/+15 (the graveyard branch is now :2357, its mirror :2498, the tunnel test :2330), but the file:line citations in F-05, F-06, F-07 and F-10 were not updated and now point at the wrong lines in the very file this change edits.
 - src/modules/PlayerBots/playerbot/strategy/actions/BattleGroundTactics.cpp: The artifact's second acceptance criterion requires one of exactly two outcomes — the route corrected or the branch disabled — and the change takes a third (neither, code unchanged); the evidence and commit message justify it, but a human should confirm the artifact is satisfied by a refutation rather than one of its two listed outcomes.
 - src/modules/PlayerBots/playerbot/strategy/actions/BattleGroundTactics.cpp: The new comments describe the branch as "preference 4-6 ... plus any bot already standing in it", but the guard is `Preference < 7 || (atGY && urand(0, 2))`: a graveyard-standing bot with Preference 0-3 enters unconditionally while one with Preference 7-9 enters only two times in three, so the comment overstates the atGY case it was written to clarify.
+
+**Result:** PR opened at https://github.com/ChrisMiho/tortoise-wow/pull/67, build tortoise-cm:20260819-2.
