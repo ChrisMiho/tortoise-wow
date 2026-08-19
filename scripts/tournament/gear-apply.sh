@@ -200,12 +200,15 @@ fi
 #   equipped=<n> failed=0    applied.
 #   equipped=<n> failed=<m>  applied in part -- the ok=0 lines printed under it
 #                            say which item and why. Look reason=cannot_equip(<n>)
-#                            up in InventoryResult (SharedDefines.h): it is a bad
-#                            item choice in the tier file, not a broken script.
-#                            The likeliest cause is armour proficiency -- 1,818
-#                            of 1,940 white items are allowable_class = -1, so a
-#                            generator filtering on that bitmask alone will have
-#                            put plate on a mage.
+#                            up in InventoryResult (src/game/Objects/Item.h:45,
+#                            NOT SharedDefines.h). The two that used to account
+#                            for every failure here -- 8 (no proficiency) and 17
+#                            (already carrying a unique) -- are handled inside
+#                            `tournament equip` now, so either one reappearing
+#                            means a bot the server would not grant, not a tier
+#                            file. Anything else IS a bad item choice, and
+#                            `gear-generate.sh --check <class> <role>` names the
+#                            requirement it fails.
 #   no summary line          the bot is offline, or the world did not answer
 #                            within GEAR_CONSOLE_WAIT. NOT "it worked": treating
 #                            a missing failed= as zero reads a silent console as

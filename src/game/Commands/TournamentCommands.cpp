@@ -661,6 +661,78 @@ static void TournamentParseItemIds(char const* str, std::vector<uint32>& ids)
     }
 }
 
+// Vanilla 1.12 class proficiencies: everything a character of this class can
+// legitimately hold by level 60, armor skills and melee weapon skills alike.
+//
+// NOT a copy of what a bot happens to have. Measured on this world 2026-08-19,
+// across every character row in tw_char: not one character of ANY class has
+// SKILL_PLATE_MAIL, and no hunter or shaman has SKILL_MAIL. PlayerbotFactory
+// grants those only from level 40 (PlayerbotFactory.cpp:4154-4163) and
+// InitSkills never runs again on a bot levelled afterwards, so a level-60 bot
+// warrior stands there unable to wear plate. That is why the tournament's own
+// gear path had to stop asking and start granting: the tier files are per class,
+// two teams must wear the same grade of kit, and a bot's randomly-shaped skill
+// list is not something a tier file can be written against.
+//
+// The table is the boundary. `tournament equip` grants a class the proficiency
+// its OWN class could always have trained; it never grants a mage plate. The
+// class-impossible half is rejected earlier and by name, at generation time, by
+// itemdb_equip_fault in scripts/tournament/lib/itemdb.sh.
+static bool TournamentClassMayTrainSkill(uint8 cls, uint32 skill)
+{
+    switch (skill)
+    {
+        // Armor. Cloth is universal; misc armor (necks, rings, trinkets, cloaks)
+        // has no proficiency skill at all and never reaches this function.
+        case SKILL_CLOTH:      return true;
+        case SKILL_LEATHER:    return cls != CLASS_MAGE && cls != CLASS_PRIEST && cls != CLASS_WARLOCK;
+        case SKILL_MAIL:       return cls == CLASS_WARRIOR || cls == CLASS_PALADIN ||
+                                      cls == CLASS_HUNTER  || cls == CLASS_SHAMAN;
+        case SKILL_PLATE_MAIL: return cls == CLASS_WARRIOR || cls == CLASS_PALADIN;
+        case SKILL_SHIELD:     return cls == CLASS_WARRIOR || cls == CLASS_PALADIN || cls == CLASS_SHAMAN;
+
+        // Melee weapons, mirroring itemdb_weapon_subclasses in
+        // scripts/tournament/lib/itemdb.sh. Ranged skills are deliberately absent:
+        // the ranged slot is not one of the 13 the tournament requires, so nothing
+        // here ever asks for one.
+        case SKILL_AXES:
+        case SKILL_2H_AXES:    return cls == CLASS_WARRIOR || cls == CLASS_PALADIN ||
+                                      cls == CLASS_HUNTER  || cls == CLASS_SHAMAN;
+        case SKILL_MACES:      return cls == CLASS_WARRIOR || cls == CLASS_PALADIN ||
+                                      cls == CLASS_ROGUE   || cls == CLASS_PRIEST  ||
+                                      cls == CLASS_SHAMAN  || cls == CLASS_DRUID;
+        case SKILL_2H_MACES:   return cls == CLASS_WARRIOR || cls == CLASS_PALADIN ||
+                                      cls == CLASS_SHAMAN  || cls == CLASS_DRUID;
+        case SKILL_POLEARMS:   return cls == CLASS_WARRIOR || cls == CLASS_PALADIN ||
+                                      cls == CLASS_HUNTER  || cls == CLASS_DRUID;
+        case SKILL_SWORDS:     return cls == CLASS_WARRIOR || cls == CLASS_PALADIN ||
+                                      cls == CLASS_HUNTER  || cls == CLASS_ROGUE  ||
+                                      cls == CLASS_MAGE    || cls == CLASS_WARLOCK;
+        case SKILL_2H_SWORDS:  return cls == CLASS_WARRIOR || cls == CLASS_PALADIN ||
+                                      cls == CLASS_HUNTER;
+        case SKILL_STAVES:     return cls != CLASS_PALADIN && cls != CLASS_ROGUE;
+        case SKILL_DAGGERS:    return cls != CLASS_PALADIN;
+        case SKILL_FIST_WEAPONS: return cls == CLASS_WARRIOR || cls == CLASS_HUNTER ||
+                                        cls == CLASS_ROGUE   || cls == CLASS_SHAMAN ||
+                                        cls == CLASS_DRUID;
+        default:               return false;
+    }
+}
+
+// The proficiency CanUseItem is about to demand, or 0 if the item needs none.
+//
+// The fist-weapon special case is Player::CanUseItem's, not ours
+// (Player.cpp:12080-12086): fist weapons swing on unarmed skill but are gated on
+// SKILL_FIST_WEAPONS, so asking GetProficiencySkill() alone would test the wrong
+// skill and grant the wrong one.
+static uint32 TournamentRequiredProficiency(ItemPrototype const* proto)
+{
+    uint32 skill = proto->GetProficiencySkill();
+    if (skill && proto->Class == ITEM_CLASS_WEAPON && proto->SubClass == ITEM_SUBCLASS_WEAPON_FIST)
+        skill = SKILL_FIST_WEAPONS;
+    return skill;
+}
+
 bool ChatHandler::HandleTournamentEquipCommand(char* args)
 {
     char* nameStr = ExtractQuotedOrLiteralArg(&args);
@@ -708,13 +780,81 @@ bool ChatHandler::HandleTournamentEquipCommand(char* args)
         // typo in a tier file, while every other InventoryResult is a real item the
         // bot may not wear. The caller has to tell those apart, so they get
         // different reasons rather than one numeric code covering both.
-        if (!sObjectMgr.GetItemPrototype(itemId))
+        ItemPrototype const* proto = sObjectMgr.GetItemPrototype(itemId);
+        if (!proto)
         {
             reason = "no_such_item";
         }
         else
         {
             uint16 dest = 0;
+
+            // Grant the proficiency BEFORE asking whether the item can be worn.
+            //
+            // Without this the answer for nine of the twenty shipped tournament
+            // bots was reason=cannot_equip(8) -- EQUIP_ERR_NO_REQUIRED_PROFICIENCY
+            // -- on most of their kit, because no character on this world holds
+            // SKILL_PLATE_MAIL and the weapon skills a bot ends up with are
+            // whatever PlayerbotFactory::SetRandomSkill last happened to set. A
+            // tier file is per class and both teams must wear the same grade of
+            // kit, so "dress this bot" has to mean it.
+            //
+            // Bounded twice over: only a skill the bot's own class could have
+            // trained (TournamentClassMayTrainSkill), and only when it has none at
+            // all -- an existing skill value is never lowered or raised, so a bot
+            // that levelled its swords keeps what it earned.
+            //
+            // Weapon skills are granted at the level cap rather than at 1. A
+            // weapon skill of 1 at level 60 equips the sword and then misses with
+            // it all match, which is the same rigged match in a different costume;
+            // 5 x level is the cap PlayerbotFactory uses
+            // (PlayerbotFactory.cpp:4271). Armor skills are binary, so 1 is the
+            // whole of it -- the same value InitSkills sets.
+            if (uint32 skill = TournamentRequiredProficiency(proto))
+            {
+                if (!player->GetSkillValue(uint16(skill)) &&
+                    TournamentClassMayTrainSkill(player->getClass(), skill))
+                {
+                    uint16 value = (proto->Class == ITEM_CLASS_WEAPON)
+                                 ? uint16(player->GetLevel() * 5) : uint16(1);
+                    player->SetSkill(uint16(skill), value, value);
+
+                    // Its own record, not a field on the per-item line: a reader
+                    // splitting that line on whitespace must keep seeing exactly
+                    // the fields it saw before, and this is a thing done TO the
+                    // bot rather than a property of the equip.
+                    std::ostringstream gs;
+                    gs << "equip player=" << name
+                       << " granted_proficiency=" << skill
+                       << " value=" << value;
+                    TournamentEmit(gs.str());
+                }
+            }
+
+            // A unique item the bot ALREADY wears has to go before it can be
+            // applied again. CanEquipItem asks CanTakeMoreSimilarItems first
+            // (Player.cpp:11677-11680), which counts the copy already equipped
+            // against MaxCount and answers EQUIP_ERR_CANT_CARRY_MORE_OF_THIS --
+            // reason=cannot_equip(17). gear-apply.sh re-dresses every bot on every
+            // run by design, so without this a unique pick applies exactly once
+            // and fails for the rest of the tournament's life; on this world the
+            // only white trinket in existence (12846 Argent Dawn Commission) is
+            // unique, so that is every bot's trinket slot from the second run on.
+            //
+            // Destroying is what the command already does to the occupant of the
+            // destination slot a few lines below; this is the same act, reached
+            // earlier because the check that would have found the slot is the very
+            // check the duplicate breaks.
+            if (proto->MaxCount > 0)
+            {
+                // Counted and destroyed over the same ground, bank included: the
+                // count is what CanTakeMoreSimilarItems will hold against the
+                // equip (GetItemCount's inBankAlso), so destroying anything less
+                // than all of it leaves the block in place and the fix silent.
+                uint32 have = player->GetItemCount(itemId, true);
+                if (have > 0)
+                    player->DestroyItemCount(itemId, have, true, false, true);
+            }
 
             // swap = true, and it is load-bearing. The slot is EXPECTED to hold the
             // previous tier's item: FindEquipSlot with swap = false refuses any
