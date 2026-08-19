@@ -5,38 +5,33 @@ order, and the one place the drain's own rule gives the wrong answer.
 
 ---
 
-## Start with 055, not 047
+## Start with 047 — the drain's own pick
 
-`backlog-drain` picks the lowest-numbered `pending` artifact whose dependency is
-ready. That is **047**. Override it for the first tick and run **055** instead.
+**This section was rewritten after batch `20260818-8`. It originally said to
+override the drain and run 055 first.** That was based on the gear gate being
+the single thing blocking in-world verification. The batch's validation pass
+proved otherwise — see
+[the correction below](#correction-from-batch-20260818-8-055-is-not-the-only-thing-blocking-verification),
+which is the authoritative account and worth reading before you start.
 
-**Why.** `scripts/tournament/gear-apply.sh` leaves 9 of 20 bots undressed —
-`cannot_equip` per item — so `gear-audit.sh` reports `complete=5/10` and `6/10`
-and `match-run.sh` **aborts before assembly**. No tournament match can run on
-this host at all. Until 055 lands, every bot-AI fix from 046 onward ships with
-its in-world acceptance criteria unverifiable, and the log-based criteria are
-the only gate. 055's own dependency, `031-gear-tier-armour-weapon-split`, is
-`done` and merged (PR #42), so it is ready to pick right now.
+Short version: `wsg-kickoff.sh` does not go through `match-run.sh`, so the gear
+gate never entered the picture. The real blocker is that **20 bots queue and no
+WSG instance ever pops** — which is artifact **047**'s territory, and is also
+what `backlog-drain` would pick on its own. So no override is needed for the
+first tick.
 
-Run that one tick by hand:
-
-```
-Workflow({ name: "backlog-issue", args: {
-  artifactPath: "C:/Coding/tortoise-wow/tortoise-wow/docs/backlog/055-gear-apply-cannot-equip-blocks-match-assembly.md",
-  baseBranch: "cm-main" } })
-```
-
-After it lands and a batch has built it, verify the gate is really open before
-trusting the rest — `gear-audit.sh` must report `complete=10/10` for both teams
-with zero `cannot_equip` lines, and `match-run.sh` must reach
-`tournament start`. Then let the drain resume its normal lowest-first order
-from 047.
+055 is still necessary — it owns `gear-apply.sh` leaving 9 of 20 bots at
+`cannot_equip`, which makes `gear-audit.sh` report `complete=5/10` and aborts
+`match-run.sh` before assembly, blocking the tournament flow. Its dependency
+`031-gear-tier-armour-weapon-split` is `done` and merged (PR #42), so it is
+ready whenever the drain reaches it. It is simply not the first thing to fix.
 
 ---
 
 ## What is already done
 
-- **046** is `implemented` — the WSG standstill root cause. `BGTactics::Execute`
+- **046** is `done` — PR #59, build `tortoise-cm:20260818-8`, `VALIDATE-STACK: PASS`.
+  The WSG standstill root cause. `BGTactics::Execute`
   called `ChangeStrategy("-buff")` every tick; `ChangeStrategy` ended in an
   unconditional `Init()`, `Init()` calls `Reset()`, and `Reset()` deleted every
   `ActionBasket` in the queue mid-way through `DoNextAction`'s walk — so the
@@ -78,8 +73,8 @@ Both declare `depends-on: 046-...`, so neither is eligible until 046 reaches
 
 ## Order the drain will actually run
 
-`055` (by hand) → `047 048 049 050 051 052 053 054` → `056 … 065` → `067 068`
-once 046 is `done`. A batch fires every 4 implemented artifacts.
+`047 048 049 050 051 052 053 054` → `055 056 … 065` → `067 068` once 046 is
+`done` — straight lowest-first, no override. A batch fires every 4 implemented artifacts.
 
 `058` is the one to watch: its dependency `045` is `done` but its branch is
 **not** merged (PR #55 is deliberately held — the release-tag script can cut a
@@ -102,8 +97,9 @@ command error instead of answer, and the tick cannot classify the dependency.
    `tortoise-cm:c06b2fb`, the rollback anchor.
 4. **WSG matches are now for verification, not characterisation.** The earlier
    blanket ban existed to stop re-measuring a defect already measured three
-   times over. Once 055 opens the gate, a match that *verifies a code change* is
-   the point — 046's criteria 3-5 need exactly one.
+   times over. A match that *verifies a code change* is the point — 046's
+   criteria 3-5 need exactly one, and it cannot run until the queue funnel in
+   047 is fixed.
 5. **Builds run in the foreground**, `BUILD_JOBS=14`, `timeout: 600000`, verified
    with `docker images` and not the exit code. Backgrounded builds are silently
    cancelled by BuildKit.
