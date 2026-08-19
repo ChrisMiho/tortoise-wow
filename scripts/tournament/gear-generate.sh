@@ -239,14 +239,22 @@ generate_one() { # <className> <role>
 # The same judgement, applied to a file that already exists -- the only way a
 # hand-curated tier ever gets judged, since it never went through the generator.
 check_one() { # <className> <role>
-    local cname="$1" role="$2" cid t rc=0
+    local cname="$1" role="$2" cid t tiers rc=0
     cid="$(class_id "$cname")"
     [ -n "$cid" ] || { echo "FATAL: unknown class '$cname'" >&2; return 1; }
+    # Command substitution, NOT `done < <(gear_tiers ...)`. A redirect from a
+    # process substitution throws the generator's exit status away: the `||`
+    # there was reading the WHILE loop's status, which is 0 after zero
+    # iterations, so a missing or unreadable tier file made --check print
+    # `ok <class>-<role>` and exit 0 -- the exact false green this command
+    # exists to prevent (--check against an empty $OUT_DIR passed all 12).
+    tiers="$(gear_tiers "$cname" "$role")" || return 1
+    [ -n "$tiers" ] || { echo "FATAL: $cname-$role has no tiers" >&2; return 1; }
     while IFS= read -r t; do
         [ -n "${t:-}" ] || continue
         gear_items "$cname" "$role" "$t" | tr '|' '\t' \
             | check_tier "$cname" "$role" "$cid" "$t" || rc=1
-    done < <(gear_tiers "$cname" "$role") || return 1
+    done <<< "$tiers"
     [ "$rc" -eq 0 ] && echo "ok $cname-$role"
     return "$rc"
 }
