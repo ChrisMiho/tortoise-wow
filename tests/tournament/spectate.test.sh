@@ -58,4 +58,35 @@ assert_eq "3" "$(grep -c 'tournament camera' "$CALLS")" "stops as soon as the in
 assert_contains "$OUT" "SPECTATE" "emits a summary line"
 assert_contains "$OUT" "repositions=2" "counts only successful repositions"
 
+# A spectator_teleporting refusal must NOT end the broadcast. The camera is
+# itself a teleport, so this is what a cut issued while the spectator is still on
+# the previous cut's loading screen looks like -- a state that clears itself when
+# the world-port ack lands. This stub cuts once, refuses twice while "loading",
+# cuts again, then ends the match: a director that treated the token as fatal
+# would stop at call two with rc=1 and repositions=1.
+cat > "$st/ctlstub-teleporting.sh" <<'STUB'
+CALLS_FILE="${CALLS_FILE:-/dev/null}"
+ctl() {
+  printf '%s\n' "$*" >> "$CALLS_FILE"
+  n=$(grep -c 'tournament camera' "$CALLS_FILE")
+  case "$n" in
+    2|3) printf 'TOURNAMENT camera error=spectator_teleporting(Astral)\n' ;;
+    5)   printf 'TOURNAMENT camera error=no_such_instance\n' ;;
+    *)   printf 'TOURNAMENT camera player=Astral instance=101 x=1.0 y=2.0 z=30.0 reason=combat moved=1\n' ;;
+  esac
+}
+ctl_field() { printf '%s\n' "$1" | sed -n "s/.*[[:space:]]$2=\\([^[:space:]]*\\).*/\\1/p" | head -1; }
+STUB
+
+CALLS2="$st/calls2.txt"; : > "$CALLS2"
+RC2=0
+OUT2="$(CTL_STUB="$st/ctlstub-teleporting.sh" CALLS_FILE="$CALLS2" \
+        bash "$ROOT/scripts/tournament/spectate.sh" \
+        --spectator Astral --instance 101 --interval 0 --max-minutes 5 2>&1)" || RC2=$?
+
+assert_eq "0" "$RC2" "a transient spectator_teleporting refusal does not end the broadcast"
+assert_eq "5" "$(grep -c 'tournament camera' "$CALLS2")" "keeps polling through the loading screen"
+assert_contains "$OUT2" "repositions=2" "counts the cut that landed after the refusals"
+assert_eq "1" "$(printf '%s\n' "$OUT2" | grep -c 'still loading')" "says it once per streak, not once per poll"
+
 assert_summary
