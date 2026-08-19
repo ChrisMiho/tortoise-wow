@@ -883,3 +883,156 @@ bool ChatHandler::HandleTournamentStoreCommand(char* args)
     TournamentEmit(ss.str());
     return true;
 }
+
+// Resolves the argument of `heal` / `kill` to a player who is genuinely in a
+// live battleground. On refusal it hands back the reason token rather than
+// emitting it, so both commands refuse identically while each still labels the
+// record with its own verb (TournamentEmit is a protected member of
+// ChatHandler and not callable from here).
+//
+// This guard IS the task, not a formality. The viewer effect queue is durable
+// and replayed after a crash, so an effect routinely outlives the match that
+// produced it. A `kill` that lands on a bot which has already left the
+// battleground is not a harmless no-op -- it is the wrong bot dying, and to the
+// viewer it looks like nothing happened.
+//
+// The membership test is bg->IsPlayerInBattleGround (BattleGround.h:550), not
+// InBattleGround() and not a non-null GetBattleGround(). InBattleGround() is
+// only "m_bgData.bgInstanceID != 0" (Player.h:3089), so it stays true for an id
+// whose instance the manager has already reaped. GetBattleGround() resolves that
+// id, which rejects the reaped instance -- but it is still non-null for a bot
+// `tournament add` has invited and which is mid-far-teleport: add sets
+// SetBattleGroundId before SendToBattleGround (above), and the player is only
+// inserted into bg->m_Players later, when the world port acks and
+// HandleMoveWorldPortAckOpcode calls bg->AddPlayer (MovementHandler.cpp).
+// m_Players membership is the only one of the three that means "on the
+// battleground map, in the match", so `kill` cannot land lethal damage on a bot
+// still standing on its old map.
+//
+// FindPlayerByName finds in-world players only (FindPlayerByNameNotInWorld is
+// the other overload), so a bot with a session but no character in the world is
+// correctly "not online" here -- the same reading `add` and `equip` take.
+static Player* TournamentFindPlayerInBattleGround(std::string const& name, std::string& error)
+{
+    Player* plr = ObjectAccessor::FindPlayerByName(name.c_str());
+    if (!plr)
+    {
+        error = "player_not_online(" + name + ")";
+        return nullptr;
+    }
+
+    BattleGround* bg = plr->GetBattleGround();
+    if (!bg || !bg->IsPlayerInBattleGround(plr->GetObjectGuid()))
+    {
+        error = "not_in_battleground(" + name + ")";
+        return nullptr;
+    }
+
+    return plr;
+}
+
+bool ChatHandler::HandleTournamentHealCommand(char* args)
+{
+    char* nameStr = ExtractQuotedOrLiteralArg(&args);
+    if (!nameStr)
+    {
+        TournamentEmit("heal error=usage");
+        SendSysMessage("Syntax: .tournament heal <playerName>");
+        return true;
+    }
+
+    std::string name = nameStr;
+
+    std::string error;
+    Player* plr = TournamentFindPlayerInBattleGround(name, error);
+    if (!plr)
+    {
+        TournamentEmit("heal error=" + error);
+        return true;
+    }
+
+    uint32 resurrected = 0;
+    if (!plr->IsAlive())
+    {
+        // The same pair `.revive` uses (Commands.cpp:3016). Resurrecting without
+        // SpawnCorpseBones leaves the corpse standing and the client can still run
+        // back to it -- a live player with a corpse still on the field.
+        // ResurrectPlayer's restore_percent is a fraction, so 1.0f is already a
+        // full heal; the SetHealth below is what covers the alive-but-hurt case.
+        plr->ResurrectPlayer(1.0f);
+        plr->SpawnCorpseBones();
+        resurrected = 1;
+    }
+
+    plr->SetHealth(plr->GetMaxHealth());
+
+    std::ostringstream ss;
+    ss << "heal player=" << name
+       << " hp=" << plr->GetHealth()
+       << " resurrected=" << resurrected
+       << " ok=1";
+    TournamentEmit(ss.str());
+    return true;
+}
+
+bool ChatHandler::HandleTournamentKillCommand(char* args)
+{
+    char* nameStr = ExtractQuotedOrLiteralArg(&args);
+    if (!nameStr)
+    {
+        TournamentEmit("kill error=usage");
+        SendSysMessage("Syntax: .tournament kill <playerName>");
+        return true;
+    }
+
+    std::string name = nameStr;
+
+    std::string error;
+    Player* plr = TournamentFindPlayerInBattleGround(name, error);
+    if (!plr)
+    {
+        TournamentEmit("kill error=" + error);
+        return true;
+    }
+
+    // Already a corpse. Reported as a refusal rather than an error because the
+    // caller asked for something that is already true, and a replayed queue entry
+    // hits this constantly.
+    if (!plr->IsAlive())
+    {
+        TournamentEmit("kill player=" + name + " ok=0 reason=already_dead");
+        return true;
+    }
+
+    // Mirrors `.die`'s refusal (Commands.cpp:2805). Tournament bots are never
+    // hardcore, so this should never fire -- but the name comes off an untrusted
+    // effect queue on a server carrying ~1000 concurrent characters, and the
+    // alternative to the guard is a console command that can permanently destroy
+    // someone's character.
+    if (plr->IsHardcore())
+    {
+        TournamentEmit("kill player=" + name + " ok=0 reason=hardcore_character");
+        return true;
+    }
+
+    // Self-inflicted lethal damage rather than SetHealth(0) or a direct state
+    // change, so the normal battleground death path runs: the death is scored,
+    // the bot releases, and it respawns at its team's graveyard exactly like any
+    // other kill. Setting state directly would leave the scoreboard and the
+    // release timer untouched.
+    //
+    // The victim is the player itself, so there is no killer to credit -- the same
+    // shape `.die` uses with CONFIG_BOOL_DIE_COMMAND_CREDIT off
+    // (Commands.cpp:2821). durabilityLoss is false: a tournament bot's gear is
+    // handed to it by `tournament equip`, and repairing it between rounds is not
+    // something the runner does.
+    plr->DealDamage(plr, plr->GetHealth(), nullptr, DIRECT_DAMAGE, SPELL_SCHOOL_MASK_NORMAL, nullptr, false);
+
+    // "-" rather than an empty value: a reader splits the record on whitespace, and
+    // "reason=" with nothing after it is an empty-valued field to some parsers and
+    // a missing one to others.
+    std::ostringstream ss;
+    ss << "kill player=" << name << " ok=1 reason=-";
+    TournamentEmit(ss.str());
+    return true;
+}

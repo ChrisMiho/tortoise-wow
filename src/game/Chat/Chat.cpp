@@ -761,6 +761,8 @@ ChatCommand * ChatHandler::getCommandTable()
         { "result",            SEC_ADMINISTRATOR,           true,  &ChatHandler::HandleTournamentResultCommand, "", nullptr},
         { "equip",             SEC_ADMINISTRATOR,           true,  &ChatHandler::HandleTournamentEquipCommand,  "", nullptr},
         { "store",             SEC_ADMINISTRATOR,           true,  &ChatHandler::HandleTournamentStoreCommand,  "", nullptr},
+        { "heal",              SEC_ADMINISTRATOR,           true,  &ChatHandler::HandleTournamentHealCommand,   "", nullptr},
+        { "kill",              SEC_ADMINISTRATOR,           true,  &ChatHandler::HandleTournamentKillCommand,   "", nullptr},
         { nullptr,             0,                        false, nullptr,                                     "", nullptr}
     };
 
