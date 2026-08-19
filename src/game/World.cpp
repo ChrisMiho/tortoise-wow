@@ -1501,6 +1501,13 @@ void World::LoadConfigSettingsFromFile(bool reload)
     setConfig(CONFIG_UINT32_LFT_BOTFILL_LEVEL_BELOW_HEALER, "LFT.BotFill.LevelRangeBelowHealer", 4);
     setConfig(CONFIG_UINT32_LFT_BOTFILL_LEVEL_ABOVE, "LFT.BotFill.LevelRangeAbove", 6);
 
+    // Read here, once, because the only consumer (BattleGround::Update) is on a
+    // per-battleground per-tick path running on the instance map threads, and
+    // sConfig::GetIntDefault takes an exclusive lock on the process-wide config
+    // mutex. Reading it there would serialise those threads against every other
+    // sConfig reader even with telemetry disabled.
+    setConfig(CONFIG_UINT32_TOURNAMENT_TELEMETRY_INTERVAL_MS, "Tournament.TelemetryIntervalMs", 0);
+
     setConfig(CONFIG_UINT32_PERFORMANCE_REPORT_INTERVAL, "Perf.ReportInterval", 600);
     setConfig(CONFIG_UINT32_MAX_GOLD_TRANSFERRED, "Transfer.MaxGold", 300000);
     setConfig(CONFIG_UINT32_MAX_ITEM_STACK_TRANSFERRED, "Transfer.MaxItemStack", 50);
