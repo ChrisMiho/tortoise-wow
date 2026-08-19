@@ -1,0 +1,53 @@
+{
+  "class": "hunter",
+  "role": "dps",
+  "provisional": true,
+  "tiers": {
+    "base": {
+      "rank": 0,
+      "items": {
+        "head": 3894,
+        "neck": 2543,
+        "shoulders": 6189,
+        "chest": 2423,
+        "waist": 2424,
+        "legs": 2425,
+        "feet": 2426,
+        "wrists": 2427,
+        "hands": 2428,
+        "finger1": 7337,
+        "trinket1": 12846,
+        "back": 3719,
+        "mainhand": 2540
+      }
+    },
+    "upgrade": {
+      "rank": 1,
+      "items": {
+        "head": 15684,
+        "neck": 12048,
+        "shoulders": 10274,
+        "chest": 10266,
+        "waist": 20670,
+        "legs": 10273,
+        "feet": 10270,
+        "wrists": 10265,
+        "hands": 10268,
+        "finger1": 12017,
+        "trinket1": 60715,
+        "back": 60802,
+        "mainhand": 15221
+      }
+    }
+  },
+  "consumables": [
+    {
+      "itemId": 13446,
+      "count": 20
+    },
+    {
+      "itemId": 8952,
+      "count": 20
+    }
+  ]
+}

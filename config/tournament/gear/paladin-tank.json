@@ -1,0 +1,53 @@
+{
+  "class": "paladin",
+  "role": "tank",
+  "provisional": true,
+  "tiers": {
+    "base": {
+      "rank": 0,
+      "items": {
+        "head": 8092,
+        "neck": 2543,
+        "shoulders": 83543,
+        "chest": 8094,
+        "waist": 8088,
+        "legs": 8093,
+        "feet": 8089,
+        "wrists": 8090,
+        "hands": 8091,
+        "finger1": 7337,
+        "trinket1": 12846,
+        "back": 3719,
+        "mainhand": 2540
+      }
+    },
+    "upgrade": {
+      "rank": 1,
+      "items": {
+        "head": 14979,
+        "neck": 12048,
+        "shoulders": 10390,
+        "chest": 10384,
+        "waist": 20673,
+        "legs": 10389,
+        "feet": 14978,
+        "wrists": 18351,
+        "hands": 10386,
+        "finger1": 12017,
+        "trinket1": 60715,
+        "back": 60802,
+        "mainhand": 15221
+      }
+    }
+  },
+  "consumables": [
+    {
+      "itemId": 13446,
+      "count": 20
+    },
+    {
+      "itemId": 8952,
+      "count": 20
+    }
+  ]
+}

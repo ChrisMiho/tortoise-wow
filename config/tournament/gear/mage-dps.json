@@ -1,0 +1,53 @@
+{
+  "class": "mage",
+  "role": "dps",
+  "provisional": true,
+  "tiers": {
+    "base": {
+      "rank": 0,
+      "items": {
+        "head": 3892,
+        "neck": 2543,
+        "shoulders": 6566,
+        "chest": 2435,
+        "waist": 3587,
+        "legs": 2437,
+        "feet": 2438,
+        "wrists": 3588,
+        "hands": 2440,
+        "finger1": 7337,
+        "trinket1": 12846,
+        "back": 3719,
+        "mainhand": 2540
+      }
+    },
+    "upgrade": {
+      "rank": 1,
+      "items": {
+        "head": 14332,
+        "neck": 12048,
+        "shoulders": 10253,
+        "chest": 10246,
+        "waist": 20664,
+        "legs": 10252,
+        "feet": 10247,
+        "wrists": 10248,
+        "hands": 10251,
+        "finger1": 12017,
+        "trinket1": 60715,
+        "back": 60802,
+        "mainhand": 15221
+      }
+    }
+  },
+  "consumables": [
+    {
+      "itemId": 13446,
+      "count": 20
+    },
+    {
+      "itemId": 8952,
+      "count": 20
+    }
+  ]
+}

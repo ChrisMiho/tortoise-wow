@@ -1,0 +1,53 @@
+{
+  "class": "rogue",
+  "role": "dps",
+  "provisional": true,
+  "tiers": {
+    "base": {
+      "rank": 0,
+      "items": {
+        "head": 3893,
+        "neck": 2543,
+        "shoulders": 15313,
+        "chest": 2470,
+        "waist": 2471,
+        "legs": 2472,
+        "feet": 2473,
+        "wrists": 2474,
+        "hands": 2475,
+        "finger1": 7337,
+        "trinket1": 12846,
+        "back": 3719,
+        "mainhand": 2540
+      }
+    },
+    "upgrade": {
+      "rank": 1,
+      "items": {
+        "head": 15439,
+        "neck": 12048,
+        "shoulders": 10263,
+        "chest": 10264,
+        "waist": 20667,
+        "legs": 10262,
+        "feet": 15435,
+        "wrists": 10256,
+        "hands": 10260,
+        "finger1": 12017,
+        "trinket1": 60715,
+        "back": 60802,
+        "mainhand": 15221
+      }
+    }
+  },
+  "consumables": [
+    {
+      "itemId": 13446,
+      "count": 20
+    },
+    {
+      "itemId": 8952,
+      "count": 20
+    }
+  ]
+}
