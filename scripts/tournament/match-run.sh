@@ -353,6 +353,100 @@ ctl "tournament start $INST" >> "$RUN_DIR/match.log"
 START_TS="$(date +%s)"
 log "match started, instance $INST"
 
+# --- 5b. viewer effect consumer ----------------------------------------------
+# Started HERE, immediately after `tournament start`, and killed the moment the
+# monitor loop breaks. That window is deliberately exactly the match: the queue
+# is append-only and outlives any single match, so a consumer still draining
+# after section 7 has logged the rosters out would apply the next queued effect
+# to the FOLLOWING pairing's bots -- a viewer's kill landing on a team that was
+# never targeted. effect-consume.sh does reject a team that is not one of the two
+# it was started with, but that check alone does not stop it from being handed the
+# next match's two teams' worth of queued commands. Two things do: this process's
+# lifetime, and the ledger seeded below.
+EFFECT_QUEUE="${EFFECT_QUEUE:-$RUN_DIR/effects.ndjson}"
+# The consumer's dedupe ledger and cap counters. Per match, deliberately: the
+# caps in TOURNAMENT-VIEWER-EFFECTS.md are per-match allowances and must reset
+# when the match does. That reset is also what makes the seeding below necessary.
+EFFECT_STATE="$RUN_DIR/effects"
+EFFECT_PID=""
+# Create the queue if it is not there. The consumer reads it line by line and a
+# zero-line file drains to nothing, so a match with no viewer activity then takes
+# exactly the same path as one with it, instead of a path where the consumer
+# starts by tripping over a missing file.
+mkdir -p "$(dirname "$EFFECT_QUEUE")" && : >> "$EFFECT_QUEUE" \
+    || log "cannot create effect queue $EFFECT_QUEUE -- viewer effects are off for this match"
+
+# Killing the process at the end of the match is only HALF of "the consumer never
+# crosses into the next match", and the missing half is the one that is easy to
+# miss. The ledger that makes an effect fire exactly once is applied.txt under
+# --state, which is per-match, while EFFECT_QUEUE may name one long-lived file
+# shared by every match in a bracket -- that override exists precisely so a single
+# viewer adapter can append to one queue all night. Put those together and the
+# next match's consumer starts with an EMPTY applied.txt and re-reads the
+# append-only queue FROM THE TOP: every command an earlier match already handled
+# is unhandled again.
+#
+# Neither safety check stops it. The team check passes whenever the targeted team
+# is playing again, which in a bracket is the ordinary case, not the exception;
+# and Player::InBattleGround() passes because the bots ARE in a battleground --
+# just not the one the command was aimed at. A kill_team a viewer bought in round
+# one would fire a second time, for free, in round three.
+#
+# So before the consumer's first pass, record every id already sitting in the
+# queue as handled. This uses the consumer's own mechanism rather than a new one:
+# applied.txt is one bare id per line, tested with `grep -qx`, so effect-consume.sh
+# needs no flag and no change. An effect is aimed at a LIVE match; anything queued
+# before this one started was aimed at a different match or at no match at all,
+# and nothing in the line says which, so dropping it is the only safe reading.
+# Lines appended from here on -- the ones a viewer is producing while watching
+# THIS match -- are untouched.
+effect_seed_applied() { # -> 0 once the ledger covers everything already queued
+    local ids n
+    mkdir -p "$EFFECT_STATE" || return 1
+    # -R with fromjson? so one malformed line cannot abort the scan and take every
+    # id after it with it; the consumer skips such a line too. `.id? // empty`
+    # drops a line that carries no id, which the consumer also ignores.
+    ids="$(jq -R -r 'fromjson? | .id? // empty' "$EFFECT_QUEUE")" || return 1
+    n="$(printf '%s\n' "$ids" | grep -c .)"
+    if [ -n "$ids" ]; then
+        printf '%s\n' "$ids" >> "$EFFECT_STATE/applied.txt" || return 1
+    fi
+    log "queue $EFFECT_QUEUE held $n command(s) before this match -- recorded as already handled in $EFFECT_STATE/applied.txt"
+    return 0
+}
+
+# Idempotent, and safe to call when the consumer never started or has already
+# exited: killing a reaped pid is only an error if it is treated as one.
+effect_consumer_stop() {
+    [ -n "$EFFECT_PID" ] || return 0
+    kill "$EFFECT_PID" 2>/dev/null || true
+    wait "$EFFECT_PID" 2>/dev/null || true
+    log "effect consumer stopped (pid $EFFECT_PID)"
+    EFFECT_PID=""
+}
+# Belt to the explicit stop's braces. `fatal` exits, the deadline path exits, and
+# an operator can Ctrl-C; every one of those would otherwise orphan a consumer
+# that keeps draining into the next match. This is the ONLY trap in the script --
+# a second `trap ... EXIT` would REPLACE this one rather than chain with it, so
+# anything else needing to run at exit belongs inside effect_consumer_stop.
+trap 'effect_consumer_stop' EXIT
+
+if [ -x "$HERE/effect-consume.sh" ]; then
+    # Before the consumer, never after: it drains on its very first pass, so a
+    # ledger seeded a moment too late is a ledger that seeded nothing.
+    effect_seed_applied \
+        || log "WARNING: could not read $EFFECT_QUEUE to seed $EFFECT_STATE/applied.txt -- if EFFECT_QUEUE is shared between matches, an earlier match's effects may replay onto these bots"
+    "$HERE/effect-consume.sh" --queue "$EFFECT_QUEUE" \
+        --alliance "$ATEAM" --horde "$HTEAM" \
+        --state "$EFFECT_STATE" --interval 5 >> "$RUN_DIR/effects.log" 2>&1 &
+    EFFECT_PID=$!
+    log "effect consumer started (pid $EFFECT_PID), queue $EFFECT_QUEUE, state $EFFECT_STATE, log $RUN_DIR/effects.log"
+else
+    # The consumer ships separately from this file. Its absence is "no viewer
+    # effects today", not a match that cannot be played.
+    log "$HERE/effect-consume.sh is not present -- no viewer effects for this match"
+fi
+
 # --- 6. monitor --------------------------------------------------------------
 # Poll the RESULT, not the clock. A finished battleground is destroyed, so
 # `result error=no_such_instance` is the ordinary end of a match and the score
@@ -419,6 +513,13 @@ while :; do
 
     sleep "$MATCH_POLL_S"
 done
+
+# The FIRST thing after the loop, ahead of the artifact collection and well ahead
+# of section 7's logout: the match is decided, so nothing else may be applied to
+# these twenty bots, and in a few seconds they will not be in a battleground at
+# all. Every path out of the loop above -- a live result, a destroyed instance,
+# the deadline -- reaches this line.
+effect_consumer_stop
 
 DURATION=$(( $(date +%s) - START_TS ))
 
