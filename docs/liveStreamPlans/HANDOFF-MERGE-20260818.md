@@ -257,3 +257,28 @@ anything.
 - **`wsg_mysql` discards stderr**, so a failed query is indistinguishable from
   "no rows matched". Re-run through a bare `docker exec ... mysql` before
   concluding anything from an empty result.
+
+---
+
+## Outcome — executed 18 Aug
+
+All 23 mergeable PRs landed as merge commits, in the wave order above.
+`#55` held as planned. `#20` untouched. No branch deleted; origin still carries
+35 `backlog/*` refs.
+
+Wave 4 was done as a cherry-pick onto a clean `origin/cm-main` base
+(`backlog/remediation-scope`, PR `#57`), excluding `31bebaa` per the operator's
+call. The `docs/backlog/README.md` counter conflict appeared exactly as
+predicted and was resolved to `065`. The handoff-doc commit cherry-picked was
+`29df0d0`, not `3d7f37b` — the latter is a superseded 252-line draft.
+
+**The section "The trap" understated the problem.** It is not merely that
+`cm-main` read `pending` before the merges; the `done` transitions were **not on
+the PR branches at all**, only on `drain/tournament-2`. Merging all 23 PRs
+therefore left 014–054 reading `pending`, and the trap survived the merge intact.
+PR `#57` commit `7cc1a86` corrects the 32 status lines from
+`origin/backlog/remediation-scope-055-065`. Anyone repeating this exercise should
+verify statuses **after** merging, not assume the merges carry them.
+
+Rebuild and stack validation were deliberately not run — see
+`HANDOFF-BUILD-VALIDATE-20260818.md`.
