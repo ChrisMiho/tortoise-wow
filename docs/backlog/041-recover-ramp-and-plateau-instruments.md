@@ -1,5 +1,5 @@
 ---
-status: pending
+status: done
 risk: low
 area: ops/measurement
 depends-on:

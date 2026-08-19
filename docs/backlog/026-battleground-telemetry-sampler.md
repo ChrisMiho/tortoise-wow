@@ -1,5 +1,5 @@
 ---
-status: pending
+status: done
 risk: high
 area: game/battlegrounds
 depends-on:

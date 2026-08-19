@@ -1,5 +1,5 @@
 ---
-status: pending
+status: done
 risk: medium
 area: playerbots/config
 depends-on: 025-tournament-run-driver.md

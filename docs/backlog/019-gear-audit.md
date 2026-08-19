@@ -1,5 +1,5 @@
 ---
-status: pending
+status: done
 risk: low
 area: tournament/gear
 depends-on: 013-tournament-team-definitions.md

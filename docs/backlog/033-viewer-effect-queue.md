@@ -1,5 +1,5 @@
 ---
-status: pending
+status: done
 risk: low
 area: tournament/effects
 depends-on: 032-viewer-effect-library.md

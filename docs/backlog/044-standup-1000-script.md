@@ -1,5 +1,5 @@
 ---
-status: pending
+status: done
 risk: medium
 area: ops/measurement
 depends-on: 041-recover-ramp-and-plateau-instruments.md

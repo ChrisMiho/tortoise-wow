@@ -1,5 +1,5 @@
 ---
-status: pending
+status: done
 risk: medium
 area: tournament/bracket
 depends-on: 023-bracket-and-run-state-libraries.md

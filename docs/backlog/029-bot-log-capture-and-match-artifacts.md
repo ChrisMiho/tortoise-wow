@@ -1,5 +1,5 @@
 ---
-status: pending
+status: done
 risk: medium
 area: tournament/telemetry
 depends-on: 024-tournament-match-run.md
