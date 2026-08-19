@@ -389,7 +389,7 @@ custom to this server (`WSG-BOT-MATCH.md` §10).
 | **F-04** | **`bg attack fc` and the bare `bg tactics` are registered actions with no `Execute` branch.** `ActionContext.h:252` and `:257` construct `BGTactics` with names `"bg tactics"` and `"attack fc"`; `Execute` tests only for `"move to start"`, `"select objective"`, `"protect fc"`, `"move to objective"`, `"use buff"`, `"check flag"` and `"check objective"`, then falls to `return false`. | `ActionContext.h:252`, `:257`; `BattleGroundTactics.cpp:2769-2855` | **absent** | Nothing in-game today — no strategy fires them — but any future trigger or console command wired to `bg attack fc` will silently no-op and look like a broken trigger rather than a missing branch. | **high** — grep-complete over the file; no in-game symptom is claimed. |
 | **F-05** | **The entire `vPaths_WS` waypoint system is dead in WSG.** `selectObjectiveWp` short-circuits for `BATTLEGROUND_WS` before reaching the path-selection loop, and `wsgPaths()` always returns `true`, so `Execute`'s `startNewPathBegin` / `startNewPathFree` are never reached. The one remaining WSG call site is gated on a spell nobody casts in WSG. | `BattleGroundTactics.cpp:4097-4103`, `:2808-2828`, `:2311-2591`, `:4439-4451`; data `:123-478`, `:2098-2116` | **absent** (dead code) | All WSG movement runs through a hardcoded x-coordinate cascade, not pathfinding: bots take one of three authored routes per `bg role` and cannot route around a blocked corridor. It also means the asymmetry in the WS path data (4 Horde-forward cross-field paths vs 2 Alliance-forward) is **not** a cause of the faction skew. | **medium** — the reachability chain was read end to end; "`wsgPaths` always returns true" rests on every branch of `:2324-2589` terminating in `return true`, checked branch by branch. Raises to `high` with a log line in `startNewPathFree` that is never hit during a WSG match. |
 | **F-06** | **`wsgPaths`'s westbound (Alliance-attacking) tunnel branch is missing two `return true`s**, so two of its `MoveTo` calls are immediately overridden. `:2457-2459` and `:2460-2462` issue a `MoveTo` and then fall out of the `else if` chain into `:2471-2478`, which issues a second `MoveTo` to mid-field. The eastbound (Horde-attacking) mirror at `:2324-2341` returns from every branch. | `BattleGroundTactics.cpp:2457-2462` vs `:2333-2340`; override at `:2471-2478` | **broken** | An Alliance bot with `bg role < 4` between x≈1381 and x≈1450 is sent to mid-field instead of stepping back into the tunnel — the exact manoeuvre the inline comment at `:2457` says is required because "moving from the fasty to the gate directly is bugged". Note this defect biases *against* Alliance, i.e. against the observed skew, so it is not the skew's cause. | **medium** — the control flow is unambiguous; the in-game consequence is inferred from the author's own comment. Raises to `high` by watching an Alliance bot at x≈1445 during a live match. |
-| **F-07** | **The graveyard route is annotated `BUGGED` in the source and is still assigned to 30% of bots.** `bg role` is `urand(0,9)`, and `Preference` 4–6 selects the graveyard branch (comment at `:2342`: "`preference < 7 = move through graveyard (BUGGED)`") and its mirror at `:2480`. The comment at `:2326` claims the graveyard is disabled ("`< 6 becuse GY disabled`"), but the code does not disable it. | `BattleGroundTactics.cpp:2342`, `:2480`, `:2326`; role assignment `strategy/actions/BattleGroundJoinAction.cpp:1520`; re-roll `BattleGroundTactics.cpp:4219-4223` | **broken** | Roughly 3 in 10 bots take a route the author marked broken, and F-01's 1-in-4 role re-roll every 5 s can move a bot onto it mid-run. | **medium** — the assignment arithmetic is exact; *what* the bug is is not stated anywhere in the source. Raises to `high` by tailing one bot's position with `bg role` pinned to 5. |
+| **F-07** | **REFUTED by measurement — see §4.7. The route works, and is the best of the three base exits; only the comments were wrong, and they are fixed.** Originally recorded as: **the graveyard route is annotated `BUGGED` in the source and is still assigned to 30% of bots.** `bg role` is `urand(0,9)`, and `Preference` 4–6 selects the graveyard branch (comment at `:2342`: "`preference < 7 = move through graveyard (BUGGED)`") and its mirror at `:2480`. The comment at `:2326` claims the graveyard is disabled ("`< 6 becuse GY disabled`"), but the code does not disable it. | `BattleGroundTactics.cpp:2342`, `:2480`, `:2326`; role assignment `strategy/actions/BattleGroundJoinAction.cpp:1520`; re-roll `BattleGroundTactics.cpp:4219-4223` | **broken** | Roughly 3 in 10 bots take a route the author marked broken, and F-01's 1-in-4 role re-roll every 5 s can move a bot onto it mid-run. | **medium** — the assignment arithmetic is exact; *what* the bug is is not stated anywhere in the source. Raises to `high` by tailing one bot's position with `bg role` pinned to 5. |
 | **F-08** | **`jump::position bg objective` (relevance 80.5, the highest live flag-carrier action after `rocket boots`) has `isUseful() == false` in an all-bot match.** `JumpAction::isUseful()` requires `ai->HasPlayerNearby()`, which iterates `sRandomPlayerbotMgr.GetPlayers()` — **real players only**. | `strategy/actions/MovementActions.cpp:3517-3519`; `PlayerbotAI.cpp:5991-6026`; triggers `BattlegroundStrategy.cpp:79-84` (80.5) and `:24-26` (3.0) | **broken** (in the bot-vs-bot case) | No functional loss — `bg move to objective` at 80.0 sits directly below and does the travelling — but the tournament (all-bot) configuration silently runs a *different* action ladder from a match with a human present. Anything observed with a GM in the instance is therefore not the same code path, which matters for how artifact 037 measures. | **high** — both functions read end to end, and `HasPlayerNearby` draws from the real-player map. The same "an `isUseful()` gate silently disables an action" shape is already measured here for `bg join` (`WSG-BOT-MATCH.md` §3). |
 | **F-09** | **Three PvP triggers are unconditionally `false` because their entire body sits inside `#ifdef MANGOS`, and `MANGOS` is never defined** (this build defines `CMANGOS`). Affected: `PlayerHasNoFlag` (`:35-55`), `PlayerIsInBattlegroundWithoutFlag` (`:124-143`), `TeamHasFlag` (`:177-198`). Those bodies also call `GetAllianceFlagCarrierGuid()` / `GetHordeFlagCarrierGuid()`, which **exist nowhere in `src/`** — the file only compiles because the blocks are excluded. | `PvpTriggers.cpp:35-55`, `:124-143`, `:177-198`; `src/modules/PlayerBots/CMakeLists.txt:131`; registrations `TriggerContext.h:185`, `:187`, `:191` | **broken** (silently disabled by a define) | Nothing today: no strategy in this repo fires `"player has no flag"`, `"team has flag"` or `"in battleground without flag"`. It is a trap — a future strategy using one gets a trigger that never fires, and the code will not compile if the `#ifdef` is ever flipped. | **high** — grep-complete: the define is absent from all of `src/`, and the three trigger names appear nowhere outside their own declaration and registration. |
 | **F-10** | **`vPaths` and `vFlagIds` are declared uninitialised and are dereferenced without a guaranteed assignment.** `:2720-2721` declares them with no initialiser; the `switch` at `:2729-2767` has a `default: break` assigning neither, and the AV case assigns `vPaths` only. `*vPaths` is dereferenced at `:2810`, `:2824`, `:2827`, `:2843`; `vFlagIds` is null-tested at `:2841` while possibly indeterminate. | `BattleGroundTactics.cpp:2720-2721`, `:2737-2742`, `:2765-2766`, `:2810`, `:2841` | **broken** (latent) | Latent, but not for the reason a first reading gives. Two of this fork's five live BG type ids — `BATTLEGROUND_BR` = 4 (Blood Ring) and `BATTLEGROUND_SV` = 5, `SharedDefines.h:1748-1749`, both dispatched throughout `BattleGroundMgr.cpp` — have **no `case`** in this `switch` and fall to `default: break` with `vPaths` indeterminate. The `IsArena()` early-out at `:2708-2714` that would have caught Blood Ring before the `switch` is itself inside `#ifndef MANGOSBOT_ZERO`, i.e. compiled out of exactly this build. The **only** thing keeping the `default` arm unreached today is one line in another file: `AiFactory.cpp:1106` adds the `battleground` strategy — and with it every `bg *` action — only when `bgType <= BATTLEGROUND_AB`, and nothing else adds them, so `BGTactics::Execute` never runs in a BR or SV instance. Widening that gate, restoring a bot-side arena path, or adding a BG type dereferences an indeterminate pointer. The AV `vFlagIds` read at `:2841` is separately unreachable because `:2838` returns first. | **high** for the code fact and for the BR/SV gap — both read directly. **medium** that no current symptom exists: it rests on `AiFactory.cpp:1106` being the sole route to these actions, which is grep-complete over `src/` for all nine `bg *` action names (only `BattlegroundStrategy.cpp` fires them; `RogueStrategy.cpp:1439-1442` only name-tests them) but is one config change or refactor away from being false. |
@@ -696,3 +696,75 @@ provisional tier files pick items that come back `cannot_equip(8)` / `cannot_equ
 — so `gear-audit.sh` never passes and the run aborts before assembly. Anyone repeating
 this measurement will hit it. It belongs to the gear track
 (`docs/backlog/031-gear-tier-armour-weapon-split.md`), not to this analysis.
+
+### 4.7 Refuted — the graveyard route (F-07) is **not** bugged, and is the best of the three exits
+
+F-07 recorded that `wsgPaths()`'s graveyard branch is annotated `BUGGED`
+(`BattleGroundTactics.cpp:2342`, mirror `:2480`), that a second comment at `:2326`
+claims the graveyard is disabled when the code does not disable it, and that
+**nothing in the repository says what the bug is**. Artifact
+`docs/backlog/053-wsg-graveyard-route-is-marked-bugged-and-still-assigned.md`
+asked for that to be characterised before the branch was either fixed or turned
+off. It was measured, and the annotation does not survive the measurement.
+
+| | |
+|---|---|
+| Date | 2026-08-19, instance 101, 16:57:12Z–17:18:00Z (`bg.log`: `winner=1, duration=22m`) |
+| Image | `tortoise-cm:20260819-1` (revision `2593df6`) — contains artifact 046's `Engine::StrategySignature` fix, without which no bot moves and no route can be told from another |
+| Config | `Tournament.TelemetryIntervalMs = 5000`; WSG match mode on (`wsg-mode.sh on --tournament`), random pool 0 |
+| Assembly | `tournament create` / `tournament add` / `tournament start` driven directly, **not** `match-run.sh` — its gear gate still fails on this host (see the note at the end of §4.5), and gear has no bearing on pathing |
+| Sample | 4,500 `TELEMETRY tick` lines, 20 bots × 225 samples |
+
+**Route attribution.** `bg role` cannot be read back — `rndbot debug <bot> values bg`
+crashes the world — so routes are attributed geometrically, from the band just
+outside each base where the three branches run at clearly different `y`. Only the
+**outbound** leg is counted: the return leg through the same band is chosen by a
+different test (`Preference < 5`), and counting it would conflate the two. Bands:
+Horde side `x ∈ [1035, 1115]` heading east, Alliance side `x ∈ [1345, 1385]`
+heading west; within a band, graveyard / tunnel / ramp separate on `y` cleanly.
+This measures corridor traffic, not per-bot roles — `resetObjective()` re-rolls
+`bg role` one tick in four (F-01), so no bot holds one role for a whole match.
+
+| Base exit | Outbound samples | Share | Crossings begun | Reached the middle within 90 s |
+|---|---|---|---|---|
+| tunnel (`Preference` 0-3) | 148 | 36.4% | 81 | 57 — **70.4%** |
+| graveyard (`Preference` 4-6) | 89 | 21.9% | 49 | 38 — **77.6%** |
+| ramp (`Preference` 7-9) | 170 | 41.8% | 94 | 58 — **61.7%** |
+
+`urand(0, 9)` predicts 40 / 30 / 30. The graveyard is under-used relative to that
+and the ramp over-used, which is expected rather than a defect: the mid-field
+fallback and the `atHordeGY` / `atAllyGY` escape clauses both push traffic onto
+the ramp.
+
+**What graveyard traffic does differently — the numbers the artifact asked for.**
+17 of the 20 bots took the graveyard exit at least once. Those 17 travelled
+**5,765 yd** on average and **17 of 17** came within 20 yd of the enemy flag room
+(mean closest approach 1.4 yd), with 30 stalled samples each. The 3 that never took
+it travelled **3,950 yd**, 2 of 3 reached the flag room, and averaged 87 stalled
+samples — a figure dominated by `Wsgasix`, which never moved at all (0.0 yd over
+225 samples, parked at `(1520, 1482, 352)`; that is F-12's `moveToStart` spawn-wait
+case, not a routing failure).
+
+**Where bots stop, and it is not the graveyard.** Stalled samples (< 1 yd between
+consecutive 5 s samples) cluster at `(1520, 1480)` 145 — the one frozen bot —
+`(1050, 1540)` 66 at the Horde **ramp** top, `(920, 1430)` 49 in the Horde flag
+room, and `(990, 1420-1430)` 50 at the Horde upper gate, of which 46 are in combat.
+Neither graveyard waypoint appears: the busiest bucket within 30 yd of one holds 5
+samples. The two `noPath` drops the branch uses — `(1076.8, 1396, 324)` and
+`(1398.7, 1534.6, 322.5)` — caused **no** non-combat health loss anywhere in the
+match (the only two such samples in 4,500 are at `(1130, 1540)` and `(1530, 1480)`,
+neither near a drop) and no deaths; deaths cluster at `(1440, 1480)` (4) and on the
+Horde ramp (4).
+
+**Conclusion, and what changed.** The route is not corrected and the branch is not
+disabled, because the measurement the artifact required first says there is nothing
+to correct and nothing worth turning off: on completion rate the graveyard is the
+**best** of the three exits. What was wrong was the two comments, and they are what
+changed — `:2326` no longer claims the graveyard is disabled, and the branch itself
+now carries these numbers instead of a bare `BUGGED`. **`bg role`'s `urand(0, 9)`
+is untouched**, as the artifact required.
+
+**A lead this run turned up, out of scope here.** The Horde ramp top
+`(1050, 1538, 332)` holds 66 stalled samples, only 8 of them in combat, and the ramp
+has the worst completion rate of the three exits at 61.7%. That is the branch worth
+the next look, not the graveyard.

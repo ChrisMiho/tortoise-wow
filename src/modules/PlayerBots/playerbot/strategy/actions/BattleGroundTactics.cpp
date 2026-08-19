@@ -2323,7 +2323,11 @@ bool BGTactics::wsgPaths()
 
     if (pos.x > bot->GetPositionX()) //He's somewhere at the alliance side
     {
-        if (Preference < 4 && !atHordeGY) //preference < 4 = move through tunnel (< 6 becuse GY disabled)
+        // preference 0-3 = move through the tunnel. This used to read "< 6 becuse
+        // GY disabled"; the graveyard branch below was never disabled, in this
+        // build or any other in this fork's history. Measured 2026-08-19, one
+        // 20-minute 10v10: see BG-AI-ANALYSIS.md 4.7.
+        if (Preference < 4 && !atHordeGY)
         {
             if (bot->GetPositionX() < 1006.f) //to the fasty
             {
@@ -2339,7 +2343,18 @@ bool BGTactics::wsgPaths()
                 return  true;
             }
         }
-        else if (Preference < 7 || (atHordeGY && urand(0, 2))) { // preference < 7 = move through graveyard (BUGGED)
+        // preference 4-6 = move out through the Horde graveyard, plus any bot
+        // already standing in it (one that has just resurrected there).
+        //
+        // This branch carried a bare "(BUGGED)" annotation and no statement of
+        // what the bug was. Measured 2026-08-19 over one 20-minute 10v10 with
+        // Tournament.TelemetryIntervalMs = 5000: of the crossings begun on this
+        // exit, 77.6% reached the middle of the map within 90 s, against 70.4%
+        // for the tunnel and 61.7% for the ramp; the noPath drop at (1076, 1396)
+        // produced no non-combat health loss and no stall cluster. It is the best
+        // of the three, not a broken one. Do not disable it without a measurement
+        // that says otherwise -- BG-AI-ANALYSIS.md 4.7 has the run.
+        else if (Preference < 7 || (atHordeGY && urand(0, 2))) {
             if (bot->GetPositionX() < 985.f) //to the gate at the upper tunnel
             {
                 MoveTo(bg->GetMapId(), 985.940125f, 1423.260254f, 345.418121f);
@@ -2477,6 +2492,9 @@ bool BGTactics::wsgPaths()
                 return  true;
             }
         }
+        // The mirror of the branch above: preference 4-6 leave the Alliance base
+        // through its graveyard, as does any bot standing in it. Live, and
+        // measured working -- BG-AI-ANALYSIS.md 4.7.
         else if (Preference < 7 || (atAllyGY && urand(0, 2))) // through the graveyard
         {
             if (bot->GetPositionX() > 1510.2f) //To the first gate
