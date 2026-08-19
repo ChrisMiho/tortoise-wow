@@ -127,9 +127,13 @@ Four properties, each of which exists because its absence is a real failure mode
   the base tier, which would be a downgrade sold to a viewer as an upgrade.
 - **The consumer never crosses into the next match.** Two mechanisms, because the
   obvious one is only half of it. `match-run.sh` kills the consumer the moment the
-  monitor loop breaks, before the two rosters are logged out, and an `EXIT` trap
-  kills it as well so a `fatal`, the deadline path, or a Ctrl-C cannot leave it
-  running. Without that, the next effect off the queue would land on the
+  monitor loop breaks, before the two rosters are logged out — and kills its whole
+  **process group**, because a consumer sitting inside a console attach dies while
+  that `docker exec` lives on to deliver its effect seconds later. Traps on `EXIT`,
+  `TERM`, `HUP` and `INT` (`lib/effect-runner.sh`) cover every other way out: a
+  non-interactive bash with no `TERM` handler dies *without* running its `EXIT`
+  trap, which is exactly how a tournament runner terminating a match used to
+  orphan a consumer. Without all of that, the next effect off the queue lands on the
   *following* match's bots. Lifetime alone still leaks when `EFFECT_QUEUE` names
   one file shared by every match: `applied.txt` is per match, so the next
   consumer's ledger is empty and the append-only queue is read from the top again.
