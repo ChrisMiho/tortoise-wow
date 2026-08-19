@@ -329,8 +329,12 @@ Once per spectator account, before the first match:
 - [ ] **The spectator must not be a match participant.** `tournament camera` refuses one
       outright with `error=spectator_is_a_match_participant(<name>)`
       (`TournamentCommands.cpp:1288`), because enrolling the camera would make the match
-      11v10 and change its outcome. This refusal is a feature; if you see it, the answer is
-      a different character, not a workaround.
+      11v10 and change its outcome. A player `tournament add` has already invited but whose
+      port has not landed yet is refused the same way, with
+      `error=spectator_is_invited_to_the_match(<name>)` — they are not in `m_Players` yet,
+      but the world-port ack will enrol them on arrival. A player mid-teleport for any other
+      reason gets `error=spectator_teleporting(<name>)`. These refusals are a feature; if you
+      see one, the answer is a different character, not a workaround.
 - [ ] **`.appear` into a battleground is supported.** `.appear` is `HandleGonameCommand`
       (`src/game/Chat/Chat.cpp:892`, `SEC_OBSERVER`), and its battleground branch
       (`src/game/Commands/Commands.cpp:7018-7032`) sets the caller's battleground id and

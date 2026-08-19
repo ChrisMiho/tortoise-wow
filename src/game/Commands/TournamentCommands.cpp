@@ -1289,6 +1289,32 @@ bool ChatHandler::HandleTournamentCameraCommand(char* args)
         return true;
     }
 
+    // The same participant, one step earlier. m_Players is only written by
+    // BattleGround::AddPlayer, which HandleMoveWorldPortAckOpcode calls at the end
+    // of the port -- so a player `tournament add` has already invited and sent is
+    // absent from the lookup above for the whole flight and would pass it. Cutting
+    // a camera to them would teleport them off their inbound trajectory, and the
+    // ack would enrol them anyway on arrival: exactly the 11v10 the refusal above
+    // exists to prevent. The invite is the state that exists the whole time,
+    // because `add` takes it out before SendToBattleGround and only
+    // TournamentReleaseInvite or RemovePlayerAtLeave gives it back.
+    if (plr->IsInvitedForBattleGroundInstance(bg->GetInstanceID()))
+    {
+        TournamentEmit("camera error=spectator_is_invited_to_the_match(" + name + ")");
+        return true;
+    }
+
+    // Refused for the reason `add` refuses one: a player already mid-teleport
+    // cannot be sent anywhere, and TeleportTo would silently drop the second
+    // destination rather than fail loudly, leaving us to report a move that never
+    // happened. Also catches an inbound participant of some other instance whose
+    // invite this command has no business inspecting.
+    if (plr->IsBeingTeleported())
+    {
+        TournamentEmit("camera error=spectator_teleporting(" + name + ")");
+        return true;
+    }
+
     float x = 0.0f, y = 0.0f, z = 0.0f;
     std::string reason;
     std::string subject;
@@ -1317,6 +1343,20 @@ bool ChatHandler::HandleTournamentCameraCommand(char* args)
             TournamentEmit("camera error=spectator_in_another_battleground(" + name + ")");
             return true;
         }
+
+    // Everything below writes m_bgData, and every one of those writes also sets
+    // m_needSave -- so a half-applied camera move does not just look wrong now, it
+    // is flushed to characters.bgInstanceID/joinPos at the next save and outlives
+    // logout: the GM relocates into the arena on next login, and `tournament add`
+    // refuses them with already_in_a_battleground because InBattleGround() reads
+    // the leftover id. Captured here so the failure path can put every field back
+    // in one place, the way TournamentReleaseInvite undoes `add`'s writes in one
+    // place. (m_needSave itself has no setter and stays true, which only costs a
+    // save of values identical to the ones already on disk.)
+    WorldLocation const savedEntryPoint = plr->GetBattleGroundEntryPoint();
+    uint32 const savedBgInstanceId = plr->GetBattleGroundId();
+    BattleGroundTypeId const savedBgTypeId = plr->GetBattleGroundTypeId();
+    uint32 const savedBgQueueSlot = plr->GetCurrentBattlegroundQueueSlot();
 
     // Where they came from, so the end of the match sends them back somewhere
     // sensible instead of TeleportToBGEntryPoint falling back to their homebind
@@ -1363,6 +1403,14 @@ bool ChatHandler::HandleTournamentCameraCommand(char* args)
     // cutting to a camera still sitting in the last shot.
     if (!plr->TeleportTo(bg->GetMapId(), x, y, cameraZ, plr->GetOrientation(), teleFlags))
     {
+        // One rollback closing both writes above: the entry point and the
+        // battleground id go back to the values this handler found, so a moved=0
+        // refusal leaves the player exactly as unentered as they were and a later
+        // `tournament add` still sees a free player.
+        plr->SetBattleGroundEntryPoint(savedEntryPoint.mapId, savedEntryPoint.x,
+                                       savedEntryPoint.y, savedEntryPoint.z, savedEntryPoint.o);
+        plr->SetBattleGroundId(savedBgInstanceId, savedBgTypeId, savedBgQueueSlot);
+
         std::ostringstream ss;
         ss << "camera player=" << name
            << " instance=" << instanceId
