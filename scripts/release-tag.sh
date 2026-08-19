@@ -29,6 +29,9 @@ HERE="$(cd "$(dirname "$0")" && pwd)"
 . "$HERE/lib/provenance.sh"
 
 RELEASE_DOC="docs/playerbots/TOURNAMENT-RELEASE.md"
+# Overridable so the tests can exercise the gates against a stub instead of the
+# live stack -- running the real one here would need a running server.
+TW_VERIFY="${TW_VERIFY:-$HERE/verify-running-commit.sh}"
 
 usage() {
     cat >&2 <<'USAGE'
@@ -54,13 +57,22 @@ done
 [ -n "$TAG" ] || { usage; exit 2; }
 
 # Catch a malformed name here rather than letting `git tag` fail halfway through
-# a release. Docker refuses a tag starting with '.' or '-' even where git allows
-# it, and a git tag with no matching image tag is a half-cut release.
+# a release. git is the more permissive of the two: 'release/v1' is a perfectly
+# legal git tag but not a legal docker tag, so without this the annotated tag is
+# created and `docker tag tortoise-cm:release/v1` then fails on an invalid
+# reference -- the git-tag-with-no-image state gate 2 exists to prevent. So the
+# name must satisfy BOTH namespaces before anything is created, and the docker
+# rule is checked as docker states it rather than as a list of the two leading
+# characters that bit us first: [a-zA-Z0-9_][a-zA-Z0-9._-]{0,127}.
 git check-ref-format "refs/tags/$TAG" || {
     echo "FATAL: '$TAG' is not a valid git tag name." >&2; exit 2; }
-case "$TAG" in
-    .*|-*) echo "FATAL: '$TAG' cannot be a docker tag (it starts with '.' or '-')." >&2; exit 2 ;;
-esac
+if ! printf '%s' "$TAG" | grep -Eq '^[a-zA-Z0-9_][a-zA-Z0-9._-]{0,127}$'; then
+    echo "FATAL: '$TAG' is not a valid docker tag, so tagging it would leave a git" >&2
+    echo "       tag with no matching image. A docker tag must start with a letter," >&2
+    echo "       digit or '_', then contain only letters, digits, '.', '_' or '-'" >&2
+    echo "       (128 chars max) -- no '/', no ':'. Try 'release-v1' instead." >&2
+    exit 2
+fi
 
 # A worktree's .git is a FILE holding a gitdir: pointer, not a directory, so test
 # for both or this refuses to run anywhere but the main checkout.
@@ -90,22 +102,6 @@ if prov_git rev-parse -q --verify "refs/tags/$TAG" >/dev/null; then
     exit 1
 fi
 
-# --- gate 3: the running server is this commit -----------------------------
-echo
-echo "==> verifying the running server is built from HEAD"
-if ! "$HERE/verify-running-commit.sh"; then
-    echo >&2
-    echo "FATAL: the running server is not built from HEAD (see the verdict above)." >&2
-    echo "       DRIFT means build and validate this commit first; UNKNOWN means" >&2
-    echo "       nothing is running to check, and an unchecked build is exactly" >&2
-    echo "       what this gate exists to keep out of a release tag." >&2
-    echo "         ./scripts/rebuild.sh" >&2
-    echo "         ./scripts/validate-stack.sh --image ${TW_IMAGE}:${SHORT} --keep-up" >&2
-    echo "       No tag was created." >&2
-    exit 1
-fi
-
-# --- create the tag --------------------------------------------------------
 # .env sets TW_IMAGE to a full ref (tortoise-cm:c06b2fb) while lib/provenance.sh
 # defaults it to the bare repository (tortoise-cm). Accept both: strip a trailing
 # :tag, or "${IMAGE_REPO}:${SHORT}" comes out as tortoise-cm:c06b2fb:9a1b2c3,
@@ -116,6 +112,22 @@ case "${IMAGE_REPO##*/}" in
     *:*) IMAGE_REPO="${IMAGE_REPO%:*}" ;;
 esac
 
+# --- gate 3: the running server is this commit -----------------------------
+echo
+echo "==> verifying the running server is built from HEAD"
+if ! "$TW_VERIFY"; then
+    echo >&2
+    echo "FATAL: the running server is not built from HEAD (see the verdict above)." >&2
+    echo "       DRIFT means build and validate this commit first; UNKNOWN means" >&2
+    echo "       nothing is running to check, and an unchecked build is exactly" >&2
+    echo "       what this gate exists to keep out of a release tag." >&2
+    echo "         ./scripts/rebuild.sh" >&2
+    echo "         ./scripts/validate-stack.sh --image ${IMAGE_REPO}:${SHORT} --keep-up" >&2
+    echo "       No tag was created." >&2
+    exit 1
+fi
+
+# --- create the tag --------------------------------------------------------
 prov_git tag -a "$TAG" -F - <<EOF || { echo "FATAL: git tag failed; nothing was created." >&2; exit 1; }
 $TAG
 
