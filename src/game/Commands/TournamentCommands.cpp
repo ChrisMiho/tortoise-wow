@@ -1036,3 +1036,353 @@ bool ChatHandler::HandleTournamentKillCommand(char* args)
     TournamentEmit(ss.str());
     return true;
 }
+
+// Where the story is right now, reduced to one point. This is the ONE
+// implementation of it: `poi` prints it and `camera` flies a spectator to it,
+// and a second copy would drift from this one on the first edit -- after which
+// the camera would sit somewhere `poi` never printed and nobody could tell which
+// of the two was lying.
+//
+// Fills x/y/z plus the three things the records have to name: which branch
+// answered (`reason`), the player that branch is framed on (`subject`, "-" when
+// the answer is not about one player), and how many live players the answer was
+// drawn from (`players`). The last two are out-parameters rather than something
+// `poi` works out for itself precisely because working them out means redoing
+// the reduction -- the cluster branch's player count is the size of the cluster,
+// not the size of the battleground.
+//
+// Returns false only when there is nothing to look at at all: an instance with
+// nobody alive in it. The outputs are still filled in that case (reason=empty,
+// zeroed coordinates) so a caller that prints them regardless prints something
+// deterministic rather than whatever was on the stack.
+static bool TournamentComputePoi(BattleGround* bg, float& x, float& y, float& z,
+                                 std::string& reason, std::string& subject, uint32& players)
+{
+    x = 0.0f;
+    y = 0.0f;
+    z = 0.0f;
+    reason = "empty";
+    subject = "-";
+    players = 0;
+
+    // Live players are collected ONCE. Every branch below is a different
+    // reduction over this same set: re-walking GetPlayers() per branch would be
+    // slower and, worse, racy -- a bot can die between two passes, and the
+    // record would then describe two different moments of the match at once.
+    //
+    // ObjectAccessor::FindPlayer resolves in-world players only, and a guid in
+    // GetPlayers() is not a promise the Player still exists (`members` above
+    // documents the same hazard), so every lookup is null-checked. This walks
+    // every member of a battleground on a server carrying ~1000 concurrent
+    // playerbots; a missing null check here is a crash, not a wrong answer.
+    std::vector<Player*> alive;
+    for (const auto& entry : bg->GetPlayers())
+        if (Player* player = ObjectAccessor::FindPlayer(entry.first))
+            if (player->IsAlive())
+                alive.push_back(player);
+
+    if (alive.empty())
+        return false;
+
+    // 1. A flag carrier IS the story, so it outranks everything below.
+    //
+    // GetFlagCarrierGuid is a base virtual (BattleGround.h:299) returning an
+    // empty guid by default, which is why this needs no subclass include, no
+    // aura sniffing and no per-type special case: Warsong overrides it and reads
+    // m_FlagKeepers, and a battleground with no flags answers empty and falls
+    // straight through to the combat branch. BG_TEAMS_COUNT is 2 -- index 0 is
+    // Alliance, 1 is Horde.
+    for (uint32 teamIdx = 0; teamIdx < BG_TEAMS_COUNT; ++teamIdx)
+    {
+        ObjectGuid carrier = bg->GetFlagCarrierGuid(teamIdx);
+        if (carrier.IsEmpty())
+            continue;
+
+        // A carrier who just died is still recorded as the carrier until the
+        // flag actually drops, so liveness is checked rather than trusting the
+        // guid: framing on a corpse is exactly the moment the fight has moved
+        // somewhere else.
+        Player* player = ObjectAccessor::FindPlayer(carrier);
+        if (!player || !player->IsAlive())
+            continue;
+
+        x = player->GetPositionX();
+        y = player->GetPositionY();
+        z = player->GetPositionZ();
+        reason = "flagcarrier";
+        subject = player->GetName();
+        players = uint32(alive.size());
+        return true;
+    }
+
+    // 2. Otherwise the biggest knot of players in combat.
+    //
+    // Deliberately NOT a global centroid of everyone fighting: in a two-sided
+    // battleground with a skirmish at each end, that averages out to the empty
+    // middle of the map -- the one place with nothing to watch. The largest
+    // cluster is a real fight.
+    //
+    // O(n^2) over at most 40 players, run only when a director asks. Do not
+    // "optimise" it into something that caches Player pointers between calls:
+    // they are only valid for the duration of this function.
+    float const CLUSTER_RADIUS = 40.0f;
+
+    Player* best = nullptr;
+    size_t bestCount = 0;
+    for (Player* a : alive)
+    {
+        if (!a->IsInCombat())
+            continue;
+
+        size_t count = 0;
+        for (Player* b : alive)
+            if (b->IsInCombat() && a->GetDistance(b) <= CLUSTER_RADIUS)
+                ++count;
+
+        if (count > bestCount)
+        {
+            bestCount = count;
+            best = a;
+        }
+    }
+
+    // A player in combat on their own is a bot being chewed on by a graveyard
+    // guard, not a fight worth cutting to, so a cluster has to be at least two.
+    if (best && bestCount >= 2)
+    {
+        float sx = 0.0f, sy = 0.0f, sz = 0.0f;
+        uint32 n = 0;
+        for (Player* b : alive)
+        {
+            if (!b->IsInCombat() || best->GetDistance(b) > CLUSTER_RADIUS)
+                continue;
+
+            sx += b->GetPositionX();
+            sy += b->GetPositionY();
+            sz += b->GetPositionZ();
+            ++n;
+        }
+
+        x = sx / n;
+        y = sy / n;
+        z = sz / n;
+        reason = "combat";
+        subject = best->GetName();
+        // The cluster, not the battleground: this number is how many players the
+        // framing actually covers.
+        players = n;
+        return true;
+    }
+
+    // 3. Nothing is happening. The centroid of everyone alive at least keeps the
+    //    camera on the map, and reason=centroid is the honest label for it -- a
+    //    director reading that knows the framing is a guess and can hold a wide
+    //    shot instead of cutting.
+    float sx = 0.0f, sy = 0.0f, sz = 0.0f;
+    for (Player* player : alive)
+    {
+        sx += player->GetPositionX();
+        sy += player->GetPositionY();
+        sz += player->GetPositionZ();
+    }
+
+    x = sx / alive.size();
+    y = sy / alive.size();
+    z = sz / alive.size();
+    reason = "centroid";
+    players = uint32(alive.size());
+    return true;
+}
+
+bool ChatHandler::HandleTournamentPoiCommand(char* args)
+{
+    uint32 instanceId = 0;
+    if (!ExtractUInt32(&args, instanceId))
+    {
+        TournamentEmit("poi error=usage");
+        SendSysMessage("Syntax: .tournament poi <instanceId>");
+        return true;
+    }
+
+    BattleGround* bg = TournamentFindInstance(instanceId);
+    if (!bg)
+    {
+        TournamentEmit("poi error=no_such_instance");
+        return true;
+    }
+
+    float x = 0.0f, y = 0.0f, z = 0.0f;
+    std::string reason;
+    std::string subject;
+    uint32 players = 0;
+
+    // Return value deliberately unused. "Nothing to look at" is a perfectly good
+    // answer to this question, and the helper has already labelled it
+    // reason=empty with zeroed coordinates, so this handler stays a printer and
+    // nothing else. Only `camera` branches on the return, because only `camera`
+    // has to decide whether to move a character.
+    TournamentComputePoi(bg, x, y, z, reason, subject, players);
+
+    std::ostringstream ss;
+    ss << "poi instance=" << instanceId
+       << " map=" << bg->GetMapId()
+       << " x=" << x
+       << " y=" << y
+       << " z=" << z
+       << " reason=" << reason
+       << " subject=" << subject
+       << " players=" << players;
+    TournamentEmit(ss.str());
+    return true;
+}
+
+// How far above the point of interest the spectator is put when no height is
+// given: high enough to take in a whole skirmish, low enough to still read
+// nameplates.
+static uint32 const TOURNAMENT_CAMERA_DEFAULT_HEIGHT = 25;
+
+bool ChatHandler::HandleTournamentCameraCommand(char* args)
+{
+    char* nameStr = ExtractQuotedOrLiteralArg(&args);
+    uint32 instanceId = 0;
+    uint32 height = 0;
+    if (!nameStr || !ExtractUInt32(&args, instanceId) ||
+        !ExtractOptUInt32(&args, height, TOURNAMENT_CAMERA_DEFAULT_HEIGHT))
+    {
+        TournamentEmit("camera error=usage");
+        SendSysMessage("Syntax: .tournament camera <playerName> <instanceId> [height]");
+        return true;
+    }
+
+    std::string name = nameStr;
+
+    // FindPlayerByName sees in-world players only -- the same reading `add` and
+    // `equip` take. A session with no character in the world has nothing to
+    // teleport.
+    Player* plr = ObjectAccessor::FindPlayerByName(name.c_str());
+    if (!plr)
+    {
+        TournamentEmit("camera error=spectator_not_online(" + name + ")");
+        return true;
+    }
+
+    BattleGround* bg = TournamentFindInstance(instanceId);
+    if (!bg)
+    {
+        TournamentEmit("camera error=no_such_instance");
+        return true;
+    }
+
+    // THE IMPORTANT HALF OF THIS COMMAND. The spectator must never be a member of
+    // the match they are watching: yanking a participant across the map would
+    // change the fight, and the whole point of a spectator is that the match is
+    // still 10v10 with them there. A member is refused outright rather than
+    // accommodated.
+    //
+    // IsPlayerInBattleGround is the m_Players lookup (BattleGround.h:550) -- the
+    // only one of the three membership tests that means "in the match". As
+    // `heal`/`kill` document above, InBattleGround() is just a non-zero instance
+    // id and GetBattleGround() is still non-null for a bot mid-port.
+    if (bg->IsPlayerInBattleGround(plr->GetObjectGuid()))
+    {
+        TournamentEmit("camera error=spectator_is_a_match_participant(" + name + ")");
+        return true;
+    }
+
+    float x = 0.0f, y = 0.0f, z = 0.0f;
+    std::string reason;
+    std::string subject;
+    uint32 players = 0;
+    if (!TournamentComputePoi(bg, x, y, z, reason, subject, players))
+    {
+        // Nobody alive in there, so there is nowhere to cut to. Reported with the
+        // helper's own reason token, so `poi` and `camera` speak one vocabulary.
+        std::ostringstream ss;
+        ss << "camera player=" << name
+           << " instance=" << instanceId
+           << " moved=0"
+           << " reason=" << reason;
+        TournamentEmit(ss.str());
+        return true;
+    }
+
+    // A player who is genuinely in some OTHER battleground is refused rather than
+    // moved: the teleport below has to overwrite their battleground id (see the
+    // next comment), and doing that to a real participant of another match would
+    // strand them -- their own instance would stop recognising them on the way
+    // out. `add` refuses the mirror case for the same reason.
+    if (BattleGround* other = plr->GetBattleGround())
+        if (other != bg && other->IsPlayerInBattleGround(plr->GetObjectGuid()))
+        {
+            TournamentEmit("camera error=spectator_in_another_battleground(" + name + ")");
+            return true;
+        }
+
+    // Where they came from, so the end of the match sends them back somewhere
+    // sensible instead of TeleportToBGEntryPoint falling back to their homebind
+    // (Player.cpp). Skipped when they already carry a battleground id, because
+    // then they are standing inside an arena and recording THAT as the way out
+    // would be worse than the stale value it replaces.
+    if (!plr->InBattleGround())
+        plr->SetBattleGroundEntryPoint();
+
+    // This is what makes the teleport land, and it is NOT enrolment.
+    //
+    // Player::TeleportTo refuses a battleground map outright unless the traveller
+    // already carries a battleground id (Player.cpp:2617), and the world-port ack
+    // resolves the destination as FindMap(mapId, GetBattleGroundId())
+    // (MovementHandler.cpp:133) -- so without this the spectator either does not
+    // move at all or lands in some other Warsong instance. `.appear` into a
+    // battleground does exactly this (HandleGonameCommand, Commands.cpp).
+    //
+    // It does not make them a participant: HandleMoveWorldportAckOpcode only
+    // calls bg->AddPlayer when IsInvitedForBattleGroundInstance holds, and
+    // nothing here takes out an invite -- that is `tournament add`'s job, and the
+    // guard above already refused anyone the battleground actually holds. They
+    // arrive as a GM standing on the map, which is also why `.bg leave` does not
+    // apply to them.
+    uint32 teleFlags = TELE_TO_GM_MODE;
+    if (plr->GetBattleGroundId() != bg->GetInstanceID())
+    {
+        plr->SetBattleGroundId(bg->GetInstanceID(), bg->GetTypeID(), PLAYER_MAX_BATTLEGROUND_QUEUES);
+        // Forces the far-teleport path even when they are already on a map with
+        // the same id, because the destination is a different copy of that map.
+        teleFlags |= TELE_TO_FORCE_MAP_CHANGE;
+    }
+
+    float const cameraZ = z + float(height);
+
+    // A cut, not a pan. There is no server-side API to rotate a client's view, so
+    // this drops the spectator above the action and leaves the aiming to whoever
+    // is at the keyboard: a director gets broadcast-style cuts between positions,
+    // never smooth tracking.
+    //
+    // The return value is checked rather than assumed. IsValidMapCoord rejects a
+    // position off the map, which an absurd height argument produces, and
+    // reporting moved=1 for a teleport that never happened would have a director
+    // cutting to a camera still sitting in the last shot.
+    if (!plr->TeleportTo(bg->GetMapId(), x, y, cameraZ, plr->GetOrientation(), teleFlags))
+    {
+        std::ostringstream ss;
+        ss << "camera player=" << name
+           << " instance=" << instanceId
+           << " x=" << x
+           << " y=" << y
+           << " z=" << cameraZ
+           << " reason=" << reason
+           << " moved=0";
+        TournamentEmit(ss.str());
+        return true;
+    }
+
+    std::ostringstream ss;
+    ss << "camera player=" << name
+       << " instance=" << instanceId
+       << " x=" << x
+       << " y=" << y
+       << " z=" << cameraZ
+       << " reason=" << reason
+       << " moved=1";
+    TournamentEmit(ss.str());
+    return true;
+}
