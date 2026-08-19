@@ -2456,9 +2456,11 @@ bool BGTactics::wsgPaths()
             }
             else if (bot->GetPositionX() > 1443.9f) { // moving from the fasty to the gate directly is bugged.. moving back to the tunnel first
                 MoveTo(bg->GetMapId(), 1443.761963f, 1459.581909f, 342.115417f);
+                return  true;
             }
             else if (bot->GetPositionX() > 1380.9f) { // move into the tunnel
                 MoveTo(bg->GetMapId(), 1380.761963f, 1457.581909f, 329.115417f);
+                return  true;
             }
             else if (bot->GetPositionX() > 1351.9f) //to the alliance entrance
             {
