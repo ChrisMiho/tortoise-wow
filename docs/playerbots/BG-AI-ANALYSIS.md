@@ -696,3 +696,50 @@ provisional tier files pick items that come back `cannot_equip(8)` / `cannot_equ
 — so `gear-audit.sh` never passes and the run aborts before assembly. Anyone repeating
 this measurement will hit it. It belongs to the gear track
 (`docs/backlog/031-gear-tier-armour-weapon-split.md`), not to this analysis.
+
+### 4.6 Refuted — the regression is **not** in `aiplayerbot.conf`
+
+Artifact 047 existed to bisect the six-day config window that `bg.log` and `honor.log`
+bracket (§4.3's table: every decisive match and every flag capture on this server falls
+on 2026-08-10/11). The bisect never got past its first round, because its first round is
+also its stop condition: **restore the whole `aiplayerbot.conf.bak-alive-20260809`
+backup wholesale, and the bots still do not move a single yard.**
+
+| | |
+|---|---|
+| Date | 2026-08-19 |
+| Image | `tortoise-cm:20260818-2` — the same image §4.0 measured on, and it predates artifact 046's `Engine::StrategySignature` fix (`74d2ace`) |
+| Config | `~/tortoise-wow-server-V2/etc/aiplayerbot.conf` = `aiplayerbot.conf.bak-alive-20260809` copied over wholesale, with only `AiPlayerbot.MinRandomBots`/`MaxRandomBots` forced to 0 so `match-run.sh`'s population gate could pass; `Tournament.TelemetryIntervalMs = 5000`; `docker restart tcm-mangosd` |
+| Matches | two, `scripts/tournament/match-run.sh stormwind-sentinels orgrimmar-warsong`, `ASSEMBLE_MODE=direct` — 14:00–14:18Z (19 bots entered) and 14:30–14:49Z (20 bots entered, `MATCH ... winner=NONE ... allianceScore=0 hordeScore=0 duration=1118`) |
+| Result | **0 of 20** bots with `distance > 100` in either match. 39 of 39 bot-slots read `distance=0.0 maxStep=0.0 stuck=1`; `combat=1` in 0 samples |
+
+The pass/fail signal was fixed in advance by the artifact — at least 15 of 20 bots with
+`distance > 100` on `telemetry-report.sh`'s `MOVEMENT` lines — and the 2026-08-09 config
+scores zero. Under the artifact's own stop rule the bisect ends here: none of the keys
+listed in it (`DisableActivityPriorities`, `botActiveAlone`, `AreaLevelGateEnabled`,
+`DestinationDangerEnabled`, `TravelPreemptiveLevelGap`, `DisableBotOptimizations`,
+`GlobalCooldown`, `RepeatDelay`, the `+pull` / `+rpg` strategy additions) was tested
+individually, and none needs to be: the config that predates all of them reproduces the
+freeze exactly. The order those keys would have been tried in, had round one passed, was
+the movement and activity gates first, then the timing keys, then the strategy strings —
+it was never reached.
+
+That leaves §4.2a's engine defect as the whole explanation, which is consistent: the
+`Engine::ChangeStrategy` → `Init()` → `Reset()` queue wipe is in `strategy/Engine.cpp`
+and no `aiplayerbot.conf` key can reach it. The six-day window in the logs is a
+coincidence of when matches were *run*, not of when behaviour changed.
+
+**A trap for anyone repeating this.** Battleground instance ids are reused — every run
+here got `instance=101` — and `telemetry-extract.sh` filters `bg.log` by instance id
+alone, over the whole file. Extracting "instance 101" therefore silently interleaves
+today's match with 2026-08-18's, and the interleaved position stream reports invented
+`distance=16080.3 maxStep=38.4` for bots that never left their spawn point. Slice
+`bg.log` to the match's wall-clock window *first* and pass the slice with `--log`; the
+run directory's own `telemetry.csv` has the same defect, since `match-run.sh:539` passes
+only `--instance`.
+
+**State left behind.** The live `aiplayerbot.conf` and `mangosd.conf` are byte-identical
+to the backups taken before this run — `aiplayerbot.conf.pre-047-bisect-20260819` and
+`mangosd.conf.pre-047-20260819`. `MinRandomBots`/`MaxRandomBots` are back at **1000**
+and `Tournament.TelemetryIntervalMs` is back at **0**; anyone measuring telemetry again
+must set it to 5000 and restart mangosd, as §4.0 did.

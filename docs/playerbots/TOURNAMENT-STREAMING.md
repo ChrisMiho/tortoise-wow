@@ -329,8 +329,20 @@ Once per spectator account, before the first match:
 - [ ] **The spectator must not be a match participant.** `tournament camera` refuses one
       outright with `error=spectator_is_a_match_participant(<name>)`
       (`TournamentCommands.cpp:1288`), because enrolling the camera would make the match
-      11v10 and change its outcome. This refusal is a feature; if you see it, the answer is
-      a different character, not a workaround.
+      11v10 and change its outcome. A player `tournament add` has already invited but whose
+      port has not landed yet is refused the same way, with
+      `error=spectator_is_invited_to_the_match(<name>)` — they are not in `m_Players` yet,
+      but the world-port ack will enrol them on arrival. Both are permanent facts about that
+      character for the length of the match: the answer is a different character, not a
+      workaround.
+- [ ] **`error=spectator_teleporting(<name>)` is not one of those — it is transient.** A
+      player already mid-teleport is refused because `TeleportTo` would silently drop the
+      second destination. The camera *is* a teleport, so the commonest way to see this is a
+      cut issued while the spectator is still on the loading screen from the previous cut,
+      and it clears itself the instant the world-port ack lands. Retry; do not change
+      character. `spectate.sh` already does — it treats this token as non-fatal, says so once
+      per streak, and keeps polling until either a cut lands or the `--max-minutes` budget
+      runs out.
 - [ ] **`.appear` into a battleground is supported.** `.appear` is `HandleGonameCommand`
       (`src/game/Chat/Chat.cpp:892`, `SEC_OBSERVER`), and its battleground branch
       (`src/game/Commands/Commands.cpp:7018-7032`) sets the caller's battleground id and

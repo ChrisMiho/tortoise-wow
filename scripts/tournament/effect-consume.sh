@@ -27,6 +27,13 @@
 # pass for the rest of the match, which would then fire the instant a cap was
 # raised, long after the viewer who bought it stopped watching.
 #
+# An id is CLAIMED BEFORE the first ctl call, and the claim, the apply and the
+# cap arithmetic all happen under one flock on <state>/lock. A `kill_team` is ten
+# console round trips, so recording it afterwards means a consumer killed on the
+# fourth leaves it unrecorded and the next pass wipes the team a second time; and
+# an unlocked read-then-append means two consumers sharing one state dir both
+# miss the id and both apply it.
+#
 # The queue file is READ ONLY here. Never rewrite or truncate it -- the adapter
 # may be appending to it in the same instant.
 #
@@ -71,6 +78,28 @@ LIMIT_UPGRADE_WEAPON_TEAM="${EFFECT_LIMIT_UPGRADE_WEAPON_TEAM:-2}"
 LIMIT_UPGRADE_ARMOR_PLAYER="${EFFECT_LIMIT_UPGRADE_ARMOR_PLAYER:-20}"
 LIMIT_UPGRADE_WEAPON_PLAYER="${EFFECT_LIMIT_UPGRADE_WEAPON_PLAYER:-20}"
 
+# Every cap above can be overridden from the environment, which is where an
+# operator typos one. Unvalidated, EFFECT_LIMIT_KILL_TEAM=abc makes the
+# `[ "$used" -ge "$lim" ]` below die with "integer expression expected" and
+# evaluate FALSE -- the cap silently stops biting and one script decides every
+# match on the bracket. That is the same failure count_for is already defended
+# against, one variable over. So it is named and fatal, never absorbed.
+check_limit() { # <env-var-name> <value>
+    case "$2" in
+        ''|*[!0-9]*)
+            echo "FATAL: $1 must be a non-negative integer, got '$2'" >&2
+            exit 2 ;;
+    esac
+}
+check_limit EFFECT_LIMIT_KILL_TEAM             "$LIMIT_KILL_TEAM"
+check_limit EFFECT_LIMIT_KILL_PLAYER           "$LIMIT_KILL_PLAYER"
+check_limit EFFECT_LIMIT_HEAL_TEAM             "$LIMIT_HEAL_TEAM"
+check_limit EFFECT_LIMIT_HEAL_PLAYER           "$LIMIT_HEAL_PLAYER"
+check_limit EFFECT_LIMIT_UPGRADE_ARMOR_TEAM    "$LIMIT_UPGRADE_ARMOR_TEAM"
+check_limit EFFECT_LIMIT_UPGRADE_WEAPON_TEAM   "$LIMIT_UPGRADE_WEAPON_TEAM"
+check_limit EFFECT_LIMIT_UPGRADE_ARMOR_PLAYER  "$LIMIT_UPGRADE_ARMOR_PLAYER"
+check_limit EFFECT_LIMIT_UPGRADE_WEAPON_PLAYER "$LIMIT_UPGRADE_WEAPON_PLAYER"
+
 QUEUE=""; ATEAM=""; HTEAM=""; STATE=""; ONCE=0; INTERVAL="${EFFECT_INTERVAL:-5}"
 
 usage() {
@@ -100,13 +129,21 @@ Per-effect caps for one match, each overridable from the environment:
 USAGE
 }
 
+# A value-taking flag given as the LAST argument used to `shift 2` with one
+# argument left. bash refuses to shift past $#, so $# never decreased and this
+# loop spun forever -- an operator's typo becoming a silent hang with no output,
+# seen as `timeout` rc=124. Every such flag now checks it has a value first.
+need_val() { # <flag> <remaining-argc>
+    [ "$2" -ge 2 ] || { echo "$1 requires a value" >&2; usage; exit 2; }
+}
+
 while [ $# -gt 0 ]; do
     case "$1" in
-        --queue)    QUEUE="${2:-}"; shift 2 ;;
-        --alliance) ATEAM="${2:-}"; shift 2 ;;
-        --horde)    HTEAM="${2:-}"; shift 2 ;;
-        --state)    STATE="${2:-}"; shift 2 ;;
-        --interval) INTERVAL="${2:-}"; shift 2 ;;
+        --queue)    need_val "$1" $#; QUEUE="$2"; shift 2 ;;
+        --alliance) need_val "$1" $#; ATEAM="$2"; shift 2 ;;
+        --horde)    need_val "$1" $#; HTEAM="$2"; shift 2 ;;
+        --state)    need_val "$1" $#; STATE="$2"; shift 2 ;;
+        --interval) need_val "$1" $#; INTERVAL="$2"; shift 2 ;;
         --once)     ONCE=1; shift ;;
         -h|--help)  usage; exit 0 ;;
         *) echo "unknown arg: $1" >&2; usage; exit 2 ;;
@@ -122,6 +159,23 @@ mkdir -p "$STATE" || { echo "cannot create state dir $STATE" >&2; exit 2; }
 APPLIED="$STATE/applied.txt"
 COUNTS="$STATE/counts.txt"
 touch "$APPLIED" || { echo "cannot write $APPLIED" >&2; exit 2; }
+
+# One lock per state dir -- that is, per match. Two consumers on one --state dir
+# is not exotic: it is an operator restarting the loop without killing the old
+# one. Unlocked, both read applied.txt before either appends, both miss the id,
+# and both apply the same kill_team. The lock is held across the whole
+# claim-and-apply section rather than only the read, so the cap arithmetic is
+# serialised too and a second consumer cannot slip a command past a full cap.
+LOCK="$STATE/lock"
+HAVE_FLOCK=0
+if command -v flock >/dev/null 2>&1 && exec 9>"$LOCK"; then
+    HAVE_FLOCK=1
+else
+    echo "WARN: flock is unavailable, so two consumers sharing $STATE could" >&2
+    echo "      apply the same command twice; run one consumer per match" >&2
+fi
+lock_hold()    { [ "$HAVE_FLOCK" -eq 1 ] && flock 9; return 0; }
+lock_release() { [ "$HAVE_FLOCK" -eq 1 ] && flock -u 9; return 0; }
 
 # lib/effects.sh records the tier each upgrade actually reached in
 # <state>/tiers.txt, which is what stops a second upgrade_*_player re-equipping
@@ -175,7 +229,7 @@ count_for() { # <effect> -> how many of that class have already been applied
 }
 
 drain_once() {
-    local applied=0 skipped=0 limited=0 line id fx used lim
+    local applied=0 skipped=0 limited=0 line id fx used lim eff_out eff_rc landed
     if [ -f "$QUEUE" ]; then
         # fd 3, not stdin. effect_apply reaches the world through wsg_console,
         # which attaches to the mangosd container and reads stdin; on the loop's
@@ -202,12 +256,20 @@ drain_once() {
             # -x -F: an id is a literal, and an unanchored match would let the
             # recorded id "12" suppress "123" -- a viewer's command dropped as a
             # duplicate of one it merely shares digits with.
+            fx="$(printf '%s' "$line" | jq -r '.effect // ""')"
+
+            # Everything from here to lock_release touches applied.txt and
+            # counts.txt, which another consumer may be reading in the same
+            # instant. jq and the queue line itself are process-local, so they
+            # stay outside.
+            lock_hold
+
             if grep -qxF -- "$id" "$APPLIED"; then
+                lock_release
                 skipped=$((skipped + 1))
                 continue
             fi
 
-            fx="$(printf '%s' "$line" | jq -r '.effect // ""')"
             # The cap check only applies to an effect that HAS a class. An
             # unknown or missing effect name is not "over its cap of 0" -- it is
             # a malformed command, and saying so is effect_validate's job. Left
@@ -225,29 +287,62 @@ drain_once() {
                         # still tell "viewers are over the cap" from "the
                         # adapter is double-delivering".
                         printf '%s\n' "$id" >> "$APPLIED"
+                        lock_release
                         echo "WARN: $fx is over its cap of $lim for this match, dropping id=$id" >&2
                         continue
                     fi
                     ;;
             esac
 
-            if effect_apply "$line" "$ATEAM" "$HTEAM"; then
+            # CLAIMED BEFORE THE FIRST ctl CALL. A command that failed against
+            # the world is spent, not pending -- retrying it forever is how one
+            # bot that logged out mid-match becomes an endless console loop --
+            # and a *_team effect is ten round trips, so recording it afterwards
+            # means a consumer killed on the fourth replays all ten next pass.
+            printf '%s\n' "$id" >> "$APPLIED"
+
+            # effect_apply's stdout is captured and reprinted unchanged: its
+            # EFFECT line carries applied=<n>, and that <n> -- not the exit
+            # status -- is what says whether the world was touched. The rc is
+            # all-or-nothing (1 if ANY single target failed), so keying cap on
+            # it makes a wipe free the moment one bot is offline: nine bots
+            # dead, counts.txt untouched, and the same command lands again on
+            # the next purchase for the rest of the match.
+            eff_out=""; eff_rc=0
+            eff_out="$(effect_apply "$line" "$ATEAM" "$HTEAM")" || eff_rc=$?
+            [ -z "$eff_out" ] || printf '%s\n' "$eff_out"
+
+            # MUST yield exactly one integer, same discipline as count_for: a
+            # refusal before effect_apply reaches its loop prints no EFFECT
+            # line at all, and "" is not a number.
+            landed="$(printf '%s\n' "$eff_out" \
+                | sed -n 's/^EFFECT .*[[:space:]]applied=\([0-9][0-9]*\).*/\1/p' \
+                | tail -1)"
+            case "$landed" in
+                ''|*[!0-9]*) landed=0 ;;
+            esac
+
+            if [ "$eff_rc" -eq 0 ]; then
                 applied=$((applied + 1))
             else
                 # Refused outright, or landed on some targets and not others --
                 # effect_apply has already said which, on stdout and stderr.
                 echo "WARN: id=$id ($fx) did not fully apply" >&2
             fi
-            # Both branches record it. A command that failed against the world
-            # is spent, not pending: retrying it forever is how one bot that
-            # logged out mid-match becomes an endless console loop.
-            printf '%s\n' "$id" >> "$APPLIED"
-            # Only a real effect class goes in the counts file. A refused
-            # command never touched the world, and a blank line in there is a
-            # line count_for has to be defended against for the rest of the match.
-            case " $EFFECT_NAMES " in
-                *" $fx "*) printf '%s\n' "$fx" >> "$COUNTS" ;;
-            esac
+
+            # AT LEAST ONE TARGET LANDED is what spends cap, and only a real
+            # effect class goes in the counts file. A refusal -- a team not in
+            # this match, say -- reaches no bot at all (applied=0, or no EFFECT
+            # line), so counting it would let two stale queue lines exhaust
+            # kill_team's cap of 2 before a single legitimate command reached a
+            # bot. A partial wipe is the mirror case: it killed bots, so it
+            # spends its one unit of cap exactly like a clean one.
+            if [ "$landed" -gt 0 ]; then
+                case " $EFFECT_NAMES " in
+                    *" $fx "*) printf '%s\n' "$fx" >> "$COUNTS" ;;
+                esac
+            fi
+            lock_release
         done 3< "$QUEUE"
     fi
 

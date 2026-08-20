@@ -28,7 +28,15 @@
 # well past login, so RSS is still climbing when the count crosses.
 #
 # Exactly one STANDUP line is printed, on every exit path, and exit 0 happens
-# only on PASS.
+# only on PASS. Reaching the count without a plateau is NOT a pass either — an
+# RSS that is still climbing has not been measured, it has been sampled mid-ramp.
+#
+# The live aiplayerbot.conf is HOST-GLOBAL shared state: this script rewrites the
+# pool target in it and restarts the world. So it takes an flock for the whole
+# run (a second invocation refuses rather than racing), and it restores the conf
+# from its backup on EVERY exit path, including the failing ones — leaving the
+# host pinned at 1000 bots after a failed run is how the next unrelated stand-up
+# gets measured against a pool it never asked for.
 set -uo pipefail
 
 # Read TW_IMAGE from the caller's environment before provenance.sh defaults it,
@@ -92,6 +100,33 @@ finish() { # <PASS|FAIL> <reason>
 
 log "out dir: $OUT"
 
+# --- 0. one run at a time --------------------------------------------------
+# The contended resource is not $OUT (every run has its own) — it is the single
+# live aiplayerbot.conf below and the single mangosd that reads it. Two runs
+# interleaving `sed -i` and `docker restart` produce a server running one target
+# while the other run waits for a different one, and whichever finishes first
+# restores the conf out from under the one still measuring.
+#
+# flock, not a pidfile: the kernel drops it when the holder exits, however it
+# exits, so a crashed run leaves nothing stale behind. The pid line is for the
+# refusal message only — nothing decides anything from it.
+LIVE_ROOT="${TW_LIVE_ROOT:-$HOME/tortoise-wow-server-V2}"
+LOCK_FILE="$LIVE_ROOT/.standup-1000.lock"
+command -v flock >/dev/null 2>&1 || finish FAIL "flock_not_installed_run_from_wsl"
+# Opened append, not truncating: > would wipe the current holder's pid line out
+# from under it, since the fd is opened before the lock is taken.
+exec 9>>"$LOCK_FILE" || finish FAIL "cannot_open_lock_$LOCK_FILE"
+if ! flock -n 9; then
+  holder="$(head -1 "$LOCK_FILE" 2>/dev/null)"
+  log "FAIL: another standup-1000.sh already holds $LOCK_FILE (${holder:-holder unknown})"
+  log "      It is editing the live aiplayerbot.conf and restarting mangosd."
+  log "      Wait for it, or stop it — two runs cannot share one world."
+  finish FAIL "another_standup_running"
+fi
+printf 'pid %s started %s out %s
+' "$$" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$OUT" >&9
+log "lock held: $LOCK_FILE (pid $$)"
+
 # --- 1. the image must be ours, and verified -------------------------------
 #
 # TW_IMAGE as the batch pass leaves it in .env is a FULL tag
@@ -130,9 +165,40 @@ fi
 log "provenance, identity and liveness OK"
 
 # --- 2. set the pool target ------------------------------------------------
-CONF="${TW_LIVE_ROOT:-$HOME/tortoise-wow-server-V2}/etc/aiplayerbot.conf"
+CONF="$LIVE_ROOT/etc/aiplayerbot.conf"
 [ -f "$CONF" ] || finish FAIL "no_aiplayerbot_conf_at_$CONF"
-cp "$CONF" "$OUT/aiplayerbot.conf.before" 2>/dev/null || true
+CONF_BACKUP="$OUT/aiplayerbot.conf.before"
+# Hard-fail, not `|| true`: without a readable backup there is nothing to
+# restore, and the old form would have gone on to edit the conf anyway.
+cp "$CONF" "$CONF_BACKUP" || finish FAIL "cannot_back_up_$CONF"
+
+# Installed BEFORE the first `sed -i`, so there is no window in which the conf is
+# modified and no trap would put it back. finish() exits, so this fires on every
+# gate failure too, and the shell's own EXIT covers a kill or a set -e death.
+#
+# The conf is restored on disk; mangosd keeps the target it was restarted with
+# until something restarts it again. That is deliberate — restarting the world
+# from an exit trap would drop every session of a run that failed for an
+# unrelated reason. The next restart reads the restored file.
+CONF_RESTORED=0
+restore_conf() {
+  [ "$CONF_RESTORED" = 0 ] || return 0
+  [ -n "${CONF_BACKUP:-}" ] && [ -f "$CONF_BACKUP" ] || return 0
+  CONF_RESTORED=1
+  if cp "$CONF_BACKUP" "$CONF"; then
+    log "restored $CONF from $CONF_BACKUP (mangosd keeps target=$TARGET until its next restart)"
+  else
+    log "WARN: *** could not restore $CONF from $CONF_BACKUP — the live pool  ***"
+    log "WARN: *** target is STILL PINNED at $TARGET. Put it back by hand.    ***"
+  fi
+}
+cleanup() {
+  [ -n "${TRACE_PID:-}" ] && kill "$TRACE_PID" 2>/dev/null
+  restore_conf
+  return 0
+}
+trap cleanup EXIT
+
 sed -i "s/^AiPlayerbot.MinRandomBots.*/AiPlayerbot.MinRandomBots = $TARGET/" "$CONF"
 sed -i "s/^AiPlayerbot.MaxRandomBots.*/AiPlayerbot.MaxRandomBots = $TARGET/" "$CONF"
 # Post-condition BEFORE the restart: `sed -i` exits 0 whether or not it matched,
@@ -165,11 +231,13 @@ log "world is up"
 # default /home/deck/rss-watch.tsv instead of where this one looks for it.
 export TW_RSS_TRACE="$OUT/rss-trace.tsv"
 export TW_RSS_INTERVAL=30
-export TW_STACK_ROOT="${TW_LIVE_ROOT:-$HOME/tortoise-wow-server-V2}"
+export TW_STACK_ROOT="$LIVE_ROOT"
 
-"$HERE/rss-trace.sh" > "$OUT/rss-trace.err" 2>&1 &
+# 9>&- so the sampler does not inherit the run lock: if this script dies the
+# kernel must free the lock at once, not once an orphaned sampler notices.
+# The EXIT trap installed above kills it and restores the conf.
+"$HERE/rss-trace.sh" > "$OUT/rss-trace.err" 2>&1 9>&- &
 TRACE_PID=$!
-trap 'kill "$TRACE_PID" 2>/dev/null || true' EXIT
 
 # Verified alive HERE, before the long wait — not after it. A process
 # backgrounded inside a wrapped `wsl.exe -e bash -lc '...'` invocation is torn
@@ -277,7 +345,10 @@ while :; do
   tee -a "$LOG" < "$OUT/plateau.last"
   if [ "$rc" -eq 0 ]; then PLATEAU=1; break; fi
   if [ "$(date +%s)" -ge "$deadline" ]; then
-    log "WARN: no plateau within 60 min of reaching the count — gating on a still-moving RSS"
+    log "FAIL: no plateau within 60 min of reaching the count — RSS is still moving"
+    log "      Reaching $TARGET bots is not the measurement; settling there is."
+    log "      An RSS sampled mid-climb is a lower bound, not a result, so this"
+    log "      is reported as a failure rather than gated as if it had settled."
     break
   fi
   sleep 120
@@ -359,5 +430,10 @@ else
 fi
 
 [ "$ONLINE" -ge "$TARGET" ] || fail "online_below_target"
+
+# plateau=0 means every number above was read off a still-climbing RSS. It is a
+# gate, not a warning: the whole premise of this script is that reaching the
+# count is not proof the stack settled, so a run that never settled cannot pass.
+[ "$PLATEAU" = 1 ] || fail "no_plateau_rss_still_climbing"
 
 finish "$verdict" "$reason"

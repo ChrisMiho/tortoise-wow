@@ -40,7 +40,10 @@
 # for a reason that wants looking at (an unexpected error, or the time budget).
 # Either way the last line on stdout is the SPECTATE summary.
 #
-# Run from WSL: jq is not on Git Bash's PATH on this host.
+# Run from WSL. `ctl()` sends every console command through `wsg_console`, which
+# wraps `docker attach` in util-linux `script` for a pty
+# (docs/playerbots/wsg/lib/wsg-bots-common.sh:106); Git Bash ships no `script`,
+# so the whole pipeline dies on the first cut.
 set -uo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$HERE/../.." && pwd)"
@@ -100,6 +103,7 @@ deadline=$(( $(date +%s) + MAXMIN * 60 ))
 repositions=0
 lastreason=""
 silent_reported=0
+teleporting_reported=0
 rc=0
 
 while :; do
@@ -113,6 +117,24 @@ while :; do
             # signal the whole loop is waiting for.
             no_such_instance*)
                 echo "match over (instance $INSTANCE is gone)"
+                break
+                ;;
+            # Not a failure either, and the one refusal this loop CAUSES. The
+            # camera is a teleport, and `tournament camera` refuses a player who
+            # is already mid-teleport -- so a spectator whose loading screen is
+            # still up when the next cut comes round answers with this. It clears
+            # itself the moment the world-port ack lands; treating it as fatal
+            # would end the broadcast over the previous shot still arriving.
+            #
+            # Retried on the next tick rather than immediately: the wait is a
+            # client load, and the poll interval is the natural length of it.
+            # Said once per streak, not once per poll, and the time budget is what
+            # stops a spectator who is somehow stuck mid-port forever.
+            spectator_teleporting*)
+                if [ "$teleporting_reported" -eq 0 ]; then
+                    echo "spectator is still loading the previous cut; retrying every ${INTERVAL}s" >&2
+                    teleporting_reported=1
+                fi
                 ;;
             # Anything else -- spectator_not_online, a participant guard, a
             # usage error -- is the operator's problem, and continuing to poll
@@ -120,9 +142,11 @@ while :; do
             *)
                 echo "camera error: $err" >&2
                 rc=1
+                break
                 ;;
         esac
-        break
+    else
+        teleporting_reported=0
     fi
 
     if [ -z "$out" ]; then

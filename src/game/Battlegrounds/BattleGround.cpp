@@ -271,31 +271,44 @@ void BattleGround::Update(uint32 diff)
     // match that ended 0-0 can be told apart from twenty bots standing on
     // their spawn points.
     //
-    // Off unless Tournament.TelemetryIntervalMs is set. This runs on every
-    // map-update tick of every live battleground, so a server that is not
-    // running a tournament must pay nothing for it -- the config check comes
-    // first, before the accumulator is even touched.
+    // Off unless Tournament.TelemetryIntervalMs is set. BattleGround::Update is
+    // reached from BattleGroundMap::Update on one of MapManager's instance map
+    // update threads -- NOT the main world loop -- and it runs on every such
+    // tick of every live battleground. So the gate must be a cached world
+    // config read: sConfig.GetIntDefault takes an exclusive unique_lock on the
+    // process-wide config mutex and linearly enumerates every section, which
+    // would serialise the instance threads against every other sConfig reader
+    // in the process even with telemetry disabled. sWorld.getConfig is a plain
+    // array read of a value written once at config load/reload, so a server not
+    // running a tournament really does pay nothing here.
     {
-        int32 telemetryInterval = sConfig.GetIntDefault("Tournament.TelemetryIntervalMs", 0);
+        uint32 telemetryInterval = sWorld.getConfig(CONFIG_UINT32_TOURNAMENT_TELEMETRY_INTERVAL_MS);
         if (telemetryInterval > 0 && GetStatus() == STATUS_IN_PROGRESS)
         {
             m_telemetryTimer += diff;
-            if (m_telemetryTimer >= uint32(telemetryInterval))
+            if (m_telemetryTimer >= telemetryInterval)
             {
                 m_telemetryTimer = 0;
                 uint32 elapsed = GetStartTime() / 1000;
 
                 for (const auto& itr : m_Players)
                 {
-                    // Map-scoped, not sObjectAccessor.FindPlayer: Update()
-                    // runs on this instance map's update worker, concurrently
-                    // with the continent maps. A guid stays in m_Players after
-                    // the player has been teleported off the battleground map
-                    // (and until RemovePlayerAtLeave runs after a logout or
-                    // link drop), and a global lookup would hand back a Player
-                    // another thread now owns and mutates. GetBgMap()->GetPlayer
-                    // cannot escape this thread's objects -- it returns null
-                    // instead, which is the routine case here, not an error.
+                    // Thread safety, stated explicitly because this is not the
+                    // main world loop: this runs on the instance map thread
+                    // that owns GetBgMap(), concurrently with the continent
+                    // maps and with other instance maps. Every field read below
+                    // (name, position, health, alive, combat) is therefore only
+                    // safe on a Player this map owns.
+                    //
+                    // That is why the lookup is map-scoped rather than
+                    // sObjectAccessor.FindPlayer. A guid stays in m_Players
+                    // after the player has been teleported off the battleground
+                    // map (and until RemovePlayerAtLeave runs after a logout or
+                    // link drop), so a global lookup would hand back a Player
+                    // another thread now owns and mutates -- a data race.
+                    // GetBgMap()->GetPlayer cannot escape this thread's
+                    // objects: it returns null instead, which is the routine
+                    // case here, not an error.
                     Player* plr = GetBgMap()->GetPlayer(itr.first);
                     if (!plr)
                         continue;

@@ -2273,11 +2273,14 @@ ScalarMin40ManDMG = 0.01
 # points.
 #
 #   0     disables sampling entirely (default). Nothing is looped over and
-#         nothing is written - the sampler costs one config read per live
-#         battleground per world tick and no more.
+#         nothing is written - the value is cached at config load, so the gate
+#         is a single integer compare per live battleground per map tick.
 #   5000  a reasonable trace density: 20 players x 20 minutes at 5s is 4800
 #         lines, nothing next to bg.log's normal traffic.
 #
 # Only battlegrounds with status IN_PROGRESS are sampled, so the gates-closed
 # period before the start and the leave window after the end emit nothing.
+#
+# The value is cached into the world config at startup and on `.reload config`;
+# editing this file alone does not change a running server's sampling.
 Tournament.TelemetryIntervalMs = 0
