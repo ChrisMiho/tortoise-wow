@@ -15,6 +15,10 @@
 #   CTL_EQUIP_OK     how many items of each equip list succeed (default: all).
 #                    Set it to 1 to get the partial equip that used to be
 #                    reported as success.
+#   CTL_KILL_FAIL    one bot name whose `kill` answers ok=0 reason=offline. The
+#                    partial-wipe case -- nine of ten bots die because the tenth
+#                    logged out -- needs one target to refuse inside a batch the
+#                    rest of which succeeds.
 
 ctl() { # <command...>   one call = one console attach
     local line ids id i ok equipped failed reason
@@ -30,7 +34,11 @@ ctl() { # <command...>   one call = one console attach
             heal)
                 printf 'TOURNAMENT heal player=%s hp=100 resurrected=0 ok=1\n' "${3:-}" ;;
             kill)
-                printf 'TOURNAMENT kill player=%s ok=1 reason=-\n' "${3:-}" ;;
+                if [ -n "${CTL_KILL_FAIL:-}" ] && [ "${3:-}" = "$CTL_KILL_FAIL" ]; then
+                    printf 'TOURNAMENT kill player=%s ok=0 reason=offline\n' "${3:-}"
+                else
+                    printf 'TOURNAMENT kill player=%s ok=1 reason=-\n' "${3:-}"
+                fi ;;
             equip)
                 ids="${4:-}"
                 i=0; equipped=0; failed=0

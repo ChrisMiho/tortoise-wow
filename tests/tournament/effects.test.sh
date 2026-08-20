@@ -211,10 +211,7 @@ assert_contains "$OUT3" "ratelimited=2" \
 # the dedupe. All five run against CTL_STUB, so no world stands up.
 
 q3="$(mktemp)"; st3="$(mktemp -d)"
-cat > "$st3/ctlstub.sh" <<'STUB'
-ctl() { printf 'TOURNAMENT %s ok=1\n' "$*"; }
-ctl_field() { printf '%s\n' "$1" | sed -n "s/.*[[:space:]]$2=\\([^[:space:]]*\\).*/\\1/p" | head -1; }
-STUB
+cp "$ROOT/tests/fixtures/ctl-stub.sh" "$st3/ctlstub.sh"
 
 bash "$ROOT/scripts/tournament/effect-queue.sh" --queue "$q3" \
      --effect kill_team --team orgrimmar-warsong >/dev/null
@@ -263,36 +260,34 @@ assert_eq "2" "$(grep -cxF kill_team "$st4/counts.txt")" \
 # kill_team's cap of 2 never engaging. The count keys on "at least one target
 # landed" instead, which is the applied=<n> on effect_apply's own EFFECT line.
 q7="$(mktemp)"; st7="$(mktemp -d)"
-cat > "$st7/ctlstub.sh" <<'STUB'
-ctl() {
-    case "$*" in
-        *one) printf 'TOURNAMENT %s ok=0 reason=offline\n' "$*" ;;
-        *)    printf 'TOURNAMENT %s ok=1\n' "$*" ;;
-    esac
-}
-ctl_field() { printf '%s\n' "$1" | sed -n "s/.*[[:space:]]$2=\\([^[:space:]]*\\).*/\\1/p" | head -1; }
-STUB
+cp "$ROOT/tests/fixtures/ctl-stub.sh" "$st7/ctlstub.sh"
 for i in 1 2 3 4 5; do
   bash "$ROOT/scripts/tournament/effect-queue.sh" --queue "$q7" \
        --effect kill_team --team orgrimmar-warsong >/dev/null
 done
-OUT7="$(CTL_STUB="$st7/ctlstub.sh" bash "$ROOT/scripts/tournament/effect-consume.sh" \
+OUT7="$(CTL_KILL_FAIL=Wsghone CTL_STUB="$st7/ctlstub.sh" \
+        bash "$ROOT/scripts/tournament/effect-consume.sh" \
         --queue "$q7" --alliance stormwind-sentinels --horde orgrimmar-warsong \
         --state "$st7" --once 2>&1)"
 assert_eq "2|2|ratelimited=3" \
   "$(grep -c 'applied=9 failed=1' <<< "$OUT7")|$(grep -cxF kill_team "$st7/counts.txt")|$(sed -n 's/^CONSUME .*\(ratelimited=[0-9]*\).*/\1/p' <<< "$OUT7")" \
   "a wipe that landed on nine of ten bots spends cap: the third is rate limited"
 
-# A consumer killed partway through a kill_team's ten ctl calls. The id used to
-# be appended only after effect_apply returned, so the next pass replayed the
-# whole wipe -- ten bots killed twice off one purchase.
+# A consumer killed while a kill_team is in flight. The id used to be appended
+# only after effect_apply returned, so the next pass replayed the whole wipe --
+# ten bots killed twice off one purchase.
+#
+# A team effect is ONE attach carrying ten commands, so the kill has to land on
+# that single call; an earlier version of this stub died on its fourth ctl(),
+# which batching made unreachable and the case vacuous. The world has already
+# received the batch when the consumer dies, which is exactly the state the
+# claim-before-send ordering exists for.
 q5="$(mktemp)"; st5="$(mktemp -d)"
 cat > "$st5/ctlstub.sh" <<'STUB'
 ctl() {
     n=$(cat "$CTL_COUNT" 2>/dev/null || echo 0); n=$((n + 1))
     printf '%s\n' "$n" > "$CTL_COUNT"
-    [ "$n" -lt 4 ] || kill -9 $$
-    printf 'TOURNAMENT %s ok=1\n' "$*"
+    kill -9 $$
 }
 ctl_field() { printf '%s\n' "$1" | sed -n "s/.*[[:space:]]$2=\\([^[:space:]]*\\).*/\\1/p" | head -1; }
 STUB
@@ -317,26 +312,33 @@ assert_eq "0" "$(grep -c '^EFFECT ' <<< "$OUT5")" \
 
 # Two consumers on one --state dir: an operator restarting the loop without
 # killing the old one. Unlocked, both read applied.txt before either appends to
-# it, both miss the id, and both wipe the same team. The stub logs every ctl
-# call and sleeps, so the window the two overlap in is wide, not theoretical.
+# it, both miss the id, and both wipe the same team. The stub sleeps before
+# answering, so the window the two overlap in is wide, not theoretical.
+#
+# The double-wipe is counted in ATTACHES, not in ctl() arguments. A team effect
+# sends its ten commands down one attach, so one wipe is one line in the attach
+# log and a second consumer that slipped past the lock would make it two.
 q6="$(mktemp)"; st6="$(mktemp -d)"
 cat > "$st6/ctlstub.sh" <<'STUB'
-ctl() { printf '%s\n' "$*" >> "$CTL_LOG"; sleep 0.05; printf 'TOURNAMENT %s ok=1\n' "$*"; }
-ctl_field() { printf '%s\n' "$1" | sed -n "s/.*[[:space:]]$2=\\([^[:space:]]*\\).*/\\1/p" | head -1; }
+. "$TEST_ROOT/tests/fixtures/ctl-stub.sh"
+# Rename the fixture's ctl before shadowing it -- bash resolves a function body
+# at call time, so a wrapper that called `ctl` would call itself forever.
+eval "ctl_fixture() $(declare -f ctl | tail -n +2)"
+ctl() { sleep 0.05; ctl_fixture "$@"; }
 STUB
 : > "$st6/ctl.log"
 bash "$ROOT/scripts/tournament/effect-queue.sh" --queue "$q6" \
      --effect kill_team --team orgrimmar-warsong >/dev/null
 for i in 1 2; do
-  CTL_LOG="$st6/ctl.log" CTL_STUB="$st6/ctlstub.sh" \
+  TEST_ROOT="$ROOT" CTL_ATTACH_LOG="$st6/ctl.log" CTL_STUB="$st6/ctlstub.sh" \
       bash "$ROOT/scripts/tournament/effect-consume.sh" --queue "$q6" \
       --alliance stormwind-sentinels --horde orgrimmar-warsong \
       --state "$st6" --once >/dev/null 2>&1 &
 done
 wait
-assert_eq "10|1" \
+assert_eq "1|1" \
   "$(wc -l < "$st6/ctl.log" | tr -d ' ')|$(wc -l < "$st6/applied.txt" | tr -d ' ')" \
-  "two consumers on one state dir apply the kill exactly once: ten ctl calls, one id"
+  "two consumers on one state dir apply the kill exactly once: one attach, one id"
 
 # A value-taking flag as the final argument used to spin the argument loop
 # forever -- `shift 2` cannot shift with one argument left, so $# never
