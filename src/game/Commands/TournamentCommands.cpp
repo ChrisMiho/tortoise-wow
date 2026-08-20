@@ -954,12 +954,36 @@ bool ChatHandler::HandleTournamentHealCommand(char* args)
     uint32 resurrected = 0;
     if (!plr->IsAlive())
     {
+        // Same refusal the kill path makes, and for the same reason: the name comes
+        // off an untrusted effect queue, and Player::ResurrectPlayer opens with
+        // `if (IsHardcore() && !forceHc) return;` (Player.cpp:5755). Without this
+        // guard a dead hardcore character stays a ghost, the record still claims
+        // resurrected=1, and SetHealth then runs on a dead unit. Reviving a
+        // hardcore character is not this command's call to make, so refuse rather
+        // than pass forceHc.
+        if (plr->IsHardcore())
+        {
+            TournamentEmit("heal player=" + name + " ok=0 reason=hardcore_character");
+            return true;
+        }
+
         // The same pair `.revive` uses (Commands.cpp:3016). Resurrecting without
         // SpawnCorpseBones leaves the corpse standing and the client can still run
         // back to it -- a live player with a corpse still on the field.
         // ResurrectPlayer's restore_percent is a fraction, so 1.0f is already a
         // full heal; the SetHealth below is what covers the alive-but-hurt case.
         plr->ResurrectPlayer(1.0f);
+
+        // ResurrectPlayer can decline silently, so the record reports what actually
+        // happened rather than what was asked for. If the target is still a ghost,
+        // leave the corpse alone and skip SetHealth -- both are meaningless on a
+        // dead unit -- and report ok=0 instead of a resurrection that never was.
+        if (!plr->IsAlive())
+        {
+            TournamentEmit("heal player=" + name + " ok=0 reason=resurrect_refused");
+            return true;
+        }
+
         plr->SpawnCorpseBones();
         resurrected = 1;
     }
