@@ -27,18 +27,138 @@ first real integration (`docs/superpowers/plans/2026-08-12-transport-stack-merge
 wave 1, 4 PRs). If a batch build breaks, consider lowering this rather than
 raising it — smaller batches are cheaper to bisect.
 
+## Before the first tick of a session
+
+Once per session, not per tick. Each of these is a stop-and-fix, not a warning:
+
+1. **Confirm the world still exists.** `docker volume ls --format '{{.Name}}' |
+   grep -x tortoise-wow-v2_dbdata`. Silence means restore from
+   `/home/deck/tortoise-wow-server-V2/backups/pre-drain-*.sql` (WSL's home, not
+   Windows') before doing anything else.
+2. **Confirm `gh` is authenticated** — `gh auth status`. Only a batch pass pushes
+   or opens PRs, and a batch that builds for ten minutes and then cannot open a
+   single PR is a batch-wide failure, which pauses batching for the rest of
+   the session (see [Pausing batching](#pausing-batching-nobatch)).
+3. **Confirm the working branch's upstream isn't `origin/cm-main`.** Run:
+
+   ```
+   git rev-parse --abbrev-ref --symbolic-full-name '@{u}'
+   ```
+
+   The hazard is specifically an upstream of `origin/cm-main`, which turns a
+   stray `git push` into a commit on the trunk. **No upstream at all is fine
+   and so is any other upstream** — that command exiting non-zero with
+   `no upstream configured` is a pass, not a failure. Only `origin/cm-main`
+   is a stop-and-fix: `git branch --unset-upstream` before continuing.
+   (This check used to demand a bare branch name from `git status -sb` and so
+   failed a perfectly safe `origin/drain/tournament-2` upstream.)
+4. **Confirm the guardrail checker works** — `bash tests/check-guardrails.test.sh`
+   prints `21 passed, 0 failed`. **From Git Bash, not WSL** (see Environment).
+
+Report all four in the first tick's summary, then continue.
+
+## Environment
+
+Every one of these has already cost someone a session.
+
+- **`node` runs in Git Bash, `jq` runs in WSL, and neither is in the other.**
+  This inverts the usual "run scripts from WSL" rule for exactly two files:
+  `scripts/check-guardrails.js` and `scripts/check-workflow-fresh.js` are Windows
+  node and die under WSL with `node: command not found`. Everything in
+  `scripts/tournament/` needs `jq` and so must run from WSL.
+- **Builds run in the FOREGROUND and take ~8.5 minutes.** Set the command
+  timeout to **600000 ms** — the Bash tool's maximum, which it silently clamps
+  anything larger down to, so `900000` is not a thing you can ask for. The
+  build fits: 8m15s measured 2026-08-17 at `BUILD_JOBS=14`, ~90s of margin.
+  **Decide success from `docker images --filter reference=tortoise-cm`, not
+  from the exit code.** Until 2026-08-17 the default was `-j10`, the build took
+  10m11s, and it was killed at exactly 10m00s with **exit 143** (128 + SIGTERM)
+  during image export — every layer built, never tagged, which reads as a build
+  that vanished. If that recurs, the build has crept back over the ceiling:
+  re-running the identical command completes it from cache in ~40s, but report
+  it rather than absorbing it. Backgrounded, `nohup`'d or detached builds are a
+  different failure entirely and *are* silently cancelled by BuildKit, leaving
+  no image and no error. Recompiling all ~1169 translation units on every build
+  is normal — `COPY . /src` never cache-hits. Do not add ccache; it was
+  measured and reverted.
+- **Validation needs `TW_SRC_DIR` *and* `GIT_DIR`.** A worktree's `.git` is a file
+  holding a Windows path that WSL's git cannot resolve, which produces a **false**
+  `VALIDATE-STACK: FAIL FOREIGN`. Rewrite that path to its `/mnt/c/...` form and
+  export it as `GIT_DIR`. Never rebuild chasing a FOREIGN result.
+- **`docker compose` outside the main checkout needs
+  `--env-file <main-checkout>/.env`** — `.env` is gitignored and exists only
+  there. Resolve it with `git worktree list`; the first entry is the main checkout.
+- **Prefix `wsl` calls from Git Bash with `MSYS_NO_PATHCONV=1`**, and never put a
+  `$VAR` inside a wrapped `wsl -d Ubuntu -- bash -lc '...'` one-liner — the Windows
+  layer blanks it silently and you get plausible, wrong output. Write a script file.
+
+### What can actually destroy something
+
+`docker compose down -v` **from this repo is inert** — `dbdata` is `external: true`
+and compose never removes an external volume. Do not take reassurance from that;
+these are the commands that really do it, and nothing but this list guards them:
+
+- `docker volume prune`, `docker system prune --volumes`, or Docker Desktop's
+  cleanup button. With the stack down, Docker reports `tortoise-wow-v2_dbdata`
+  **100% reclaimable** — "unused" means "no running container", not "no data".
+- `docker compose down -v` run from `~/tortoise-wow-server-V2`, where the same
+  volume is compose-*managed*. Never run compose from that directory.
+- `docker image prune -a` takes `tortoise-cm:c06b2fb`, the rollback anchor.
+  Nothing rebuilds it during a drain. Plain `docker image prune` is safe.
+
+**Never delete a `backlog/*` branch from origin.** Step 5a resolves dependencies
+with `git merge-base --is-ancestor origin/backlog/<slug> origin/cm-main`; if the
+branch is gone that command *errors*, which is treated as "not ready" — a false
+deadlock that can strand half the backlog. Never delete an `integration/*` branch
+either: that ref is the only thing keeping a built image's stamped commit
+reachable. Do not retag or delete `tortoise-cm:c06b2fb`, and do not edit any
+artifact's scope.
+
+## What to watch for
+
+Beyond the outcomes each step already defines:
+
+- **The first `blocked` outcome.** `blocked` deliberately does not count toward
+  step 3's circuit breaker, so a new blocking cause would march through the whole
+  backlog without ever stopping. Investigate the first one rather than letting it
+  repeat.
+- **A ~10 minute gap inside a tick.** That is a per-artifact Docker build, which
+  the Implement prompt forbids — the batch pass is the compile gate. Report it.
+- **Confident but wrong claims.** Agents here have repeatedly reported file paths
+  and line numbers that do not exist. Spot-check anything an agent asserts about
+  the codebase before repeating it; the drain produces a great many such reports
+  with nobody reading them.
+- **After each batch**, confirm one PR per artifact and quote the
+  `VALIDATE-STACK:` line verbatim rather than summarising it.
+
+Report anything in `backlog-issue.js`, `backlog-batch.js` or this skill that is
+wrong, stale, or would break at larger batch sizes. Thirteen such defects came
+out of the 2026-08-16/17 runs; more are expected, and they are worth more than a
+clean pass.
+
 ## One tick
 
 1. Check for a stop request first: if `docs/backlog/.stop` exists, this is
    the terminal tick:
-   - Before reporting the summary and calling `ScheduleWakeup({ stop: true })`,
-     if any artifact is at `status: implemented`, run
-     [Running a batch](#running-a-batch) once — even below the usual
-     batch-size threshold — so nothing is left waiting on a batch that will
-     never trigger.
+   - **Do not run a batch, unless the file's contents say to.** Read it: the
+     word `flush` anywhere in it means run [Running a batch](#running-a-batch)
+     once first (even below the batch-size threshold); an **empty** `.stop` —
+     the normal case, and what `touch` produces — means stop without
+     batching. This is the one terminal path that defaults to *not*
+     flushing, and the default is deliberate: `.stop` is the documented
+     panic button, reached for precisely when something outside the repo is
+     going wrong (a GitHub incident, an API outage, a build host misbehaving).
+     Flushing turns that into a ten-minute build plus a push and four `gh pr
+     create` calls against the very service that prompted the stop. Nothing
+     is stranded by not flushing: artifacts left at `status: implemented` are
+     re-counted by step 11 the moment the loop restarts, and batch on the
+     next tick that reaches the threshold. The other three terminal paths
+     (steps 3, 4, 5) still flush unconditionally, because for those no
+     future tick is coming.
    - Report a summary: how many artifacts are `done`, `failed`, stuck
-     `in-progress`, still `implemented` (waiting on a future batch — should be
-     none if the flush above just ran cleanly), and still `pending` (with
+     `in-progress`, still `implemented` (waiting on a future batch — expected
+     unless `.stop` said `flush` and that flush ran cleanly; name them by
+     path so it's obvious what a restart will batch first), and still `pending` (with
      paths, so they can be picked up — or, for `in-progress`, investigated —
      again later).
    - Delete `docs/backlog/.stop`.
@@ -51,6 +171,13 @@ raising it — smaller batches are cheaper to bisect.
    restart an `in-progress` file automatically: a human needs to check
    whether a PR was already opened for it before resetting its status to
    `pending` by hand.
+
+   Also check for `docs/backlog/.nobatch` here. If it exists, batching is
+   paused — say so in this tick's report, quote the reason it records, and
+   name how many artifacts are queued at `status: implemented` behind it. It
+   does not change what this tick does (implement ticks run normally while
+   paused); it just must not go unmentioned for hours. See
+   [Pausing batching](#pausing-batching-nobatch).
 3. Check the recent failure history before starting new work — this is the
    circuit breaker. This skill keeps no state between ticks other than the
    filesystem, so read the history out of git: every completed tick commits
@@ -185,7 +312,18 @@ raising it — smaller batches are cheaper to bisect.
        name the batch pass uses; step 9's filename-derived
        `backlog/<slug>` remains only a fallback for locating the worktree
        during that step's own cleanup, not a source of truth for the batch.
-     - `**Summary:** <result.summary>`
+     - `**Summary:** <result.summary>` — **check it against the real diff
+       before you write it.** Run `git diff --name-status
+       origin/<base>...<result.branchName>` and confirm every path in that
+       output is accounted for by the summary. The summary is prose an agent
+       wrote about what it *meant* to change; on 016 it omitted a whole set of
+       battleground edits the diff actually contained, and because the PR body
+       quotes this line and lists no files, that work would have reached a
+       human reviewer invisibly. If a file isn't covered, append one sentence
+       to the line naming it and what changed there — extend the summary,
+       never trim the diff to match it. (The PR body now also carries a
+       git-derived "Files changed" block as a backstop, but this line is what
+       a reviewer actually reads.)
      - `**In-game check:** <result.inGameCheck>`
      - `**Minor findings:**` followed by one bullet per
        `result.minorFindings` entry, each formatted exactly `- <finding.file>:
@@ -202,14 +340,18 @@ raising it — smaller batches are cheaper to bisect.
      line using the result's `reason`. Unchanged from Task 5. A blocked
      outcome is not a failure — do not count it toward the circuit breaker in
      step 3.
-   - **Failed** — `success: false` with no `blocked`, and a reason that's
-     about this issue's own implementation or review: edit the artifact's
+   - **Failed** — `success: false` with no `blocked` **and no `systemic:
+     true`**, and a reason that's about this issue's own implementation or
+     review: edit the artifact's
      frontmatter to `status: failed` and append a `**Failure notes:**
      <reason>` line — use the result's `reason` if present, otherwise record
      what was actually returned or thrown so it's triage-able. Include the
      stale worktree and branch location from step 9's lookup in that same
      line.
-   - **Systemic failure** — the invocation itself is broken, not this artifact:
+   - **Systemic failure** — the invocation itself is broken, or a transient
+     outage swallowed a phase; either way it is not this artifact's fault.
+     `systemic: true` on the result decides this outright; otherwise see
+     [Systemic vs. per-artifact failures](#systemic-vs-per-artifact-failures):
      - Do **not** mark it `failed`. Set its frontmatter back to
        `status: pending` (reverse the step 6 edit; `git checkout -- <path>`
        also works if the artifact was already committed) and don't append
@@ -329,6 +471,11 @@ raising it — smaller batches are cheaper to bisect.
     all (so no more accumulation is coming and nothing would ever reach the
     threshold on its own), run the batch pass now — see
     [Running a batch](#running-a-batch) below — before doing anything else.
+    That section's own first step no-ops the call if `docs/backlog/.nobatch`
+    exists, so the trigger needs no separate check here; when it no-ops, fall
+    through to the `ScheduleWakeup` below as though the threshold hadn't been
+    reached, and say in the tick's report how many artifacts are now waiting
+    on a batch that is paused.
     Otherwise call `ScheduleWakeup` to continue:
     - `delaySeconds: 60` (the minimum — there's no external event to wait on,
       just the next tick starting promptly)
@@ -344,8 +491,26 @@ raising it — smaller batches are cheaper to bisect.
 ## Running a batch
 
 Triggered from step 11 above, or from one of the terminal-tick flushes (steps
-1, 3, 4, 5 — see [Stopping the loop](#stopping-the-loop)). Gather every
-artifact at `status: implemented`:
+1, 3, 4, 5 — see [Stopping the loop](#stopping-the-loop)).
+
+**First, check whether batching is paused.** If `docs/backlog/.nobatch`
+exists, do not run a batch at all — read the file, report its contents
+verbatim (it names the `buildId`, the failure reason, and the artifacts that
+were in the failed batch), and return immediately to whichever step called
+you. That caller then carries on as it otherwise would: step 11 schedules the
+next tick as normal, and a terminal-tick flush proceeds straight to its own
+report and `ScheduleWakeup({ stop: true })`. This guard covers every entry
+point, so no individual call site needs its own check.
+
+The sentinel is written by step 5 below when a batch fails batch-wide, and
+**only a human clears it** (`rm docs/backlog/.nobatch`), after looking at what
+broke. Its whole purpose is to keep the cheap half of the drain running while
+the expensive half waits: an implement tick is local-only — no push, no PR, no
+compile — so a broken build has no bearing on whether the next artifact can be
+written. Artifacts accumulate at `status: implemented` in the meantime and are
+re-counted by step 11 the moment the sentinel is removed.
+
+Otherwise, gather every artifact at `status: implemented`:
 
 1. For each, read back only the `**Base:**` and `**Branch:**` lines appended
    when it moved to `implemented` (step 8 of "One tick" above), plus whether a
@@ -381,8 +546,9 @@ artifact at `status: implemented`:
    ```
 
    `backlog-batch`'s Integrate phase refuses a colliding branch and reports it
-   as a batch-wide failure, so getting this wrong costs a stopped loop rather
-   than a corrupted image — but it still costs the loop.
+   as a batch-wide failure, so getting this wrong costs a wasted build and a
+   paused batcher rather than a corrupted image — but it still costs the
+   night's remaining PRs until someone clears `.nobatch`.
 3. Run `Workflow({ name: "backlog-batch", args: { buildId, batch: [...] } })`
    where each batch entry is exactly
    `{ artifactPath, branchName, baseBranch, dependsOnPrUrl, contested }`
@@ -405,23 +571,75 @@ artifact at `status: implemented`:
    at `status: implemented` and append a `**Batch note:** <prReason or
    "excluded during integration — will retry in a future batch">` line so
    it's visible without blocking the rest of the batch's success.
+4a. **Point the stack at the image this batch just built.** Edit the main
+   checkout's `.env` so `TW_IMAGE=<imageTag>` — the tag returned in step 4,
+   e.g. `TW_IMAGE=tortoise-cm:20260817-3`. Do this only on a successful batch
+   (step 4), never after a failed one (step 5), and never to a tag that
+   `validate-stack.sh` did not pass.
+
+   This is what makes later implement ticks able to *test* rather than reason.
+   `backlog-batch`'s Validate phase runs with `--keep-up`, so the stack is
+   already left running on that image; without this edit, the next tick that
+   restarts the stack or brings it up itself silently drops back to whatever
+   `.env` still names — for the first two drains, the `c06b2fb` rollback
+   anchor, in which every command this series adds is absent. An artifact
+   whose acceptance criteria need a live server (037 is the clearest case)
+   then blocks for a reason that is an artifact of stale config rather than a
+   real limitation.
+
+   `.env` is gitignored, so this is not a commit and does not belong in step
+   6's staging. The `backlog-issue` Implement prompt's rule 5 tells agents to
+   read the running image with `docker ps` rather than assume, so a stale
+   `.env` degrades to "tested less" rather than to a wrong conclusion — but
+   keep it current anyway.
+
+   Leave `tortoise-cm:c06b2fb` on the host untouched regardless. It is the
+   rollback anchor and the only image that predates the series; the `.env`
+   comment records it so the way back is one edit, not an archaeology
+   session.
+
 5. On `{ success: false, reason }`: this is a **batch-wide** failure (a
    build break, or nothing left after integration exclusions) — not a
    per-artifact one. Leave every artifact in the batch at `status:
    implemented` (do not touch their status), and report the failure loudly
    with the `reason` and the full list of artifacts that were in the
    attempted batch, so a human can decide whether to retry, exclude a
-   suspected artifact by hand, or investigate the build break directly. This
-   is a stopping condition, not a continue-the-loop one — mirroring step 8's
-   systemic-failure handling in "One tick": after step 6's commit and step
-   7's cleanup below run as normal, call `ScheduleWakeup({ stop: true })`
-   here rather than proceeding to step 8's continue. Without this, the next
-   tick would implement one more artifact, hit the batch-size threshold
-   again, and re-trigger this same failing batch — burning a full build
-   cycle every retry until a human intervenes. Step 8 below does not apply
-   when this path is taken.
+   suspected artifact by hand, or investigate the build break directly.
+
+   Then **pause batching rather than stopping the drain.** Write
+   `docs/backlog/.nobatch` containing the `buildId`, the `reason` verbatim,
+   and the artifact paths that were in the failed batch, and continue the
+   loop as step 8 below describes. The guard at the top of this section
+   makes every later batch trigger a no-op until a human removes that file,
+   which is what stops the next tick implementing one more artifact, hitting
+   the batch-size threshold, and re-triggering this same failing batch —
+   burning a full build cycle every retry. Ticks themselves keep running:
+   they are local-only and cost nothing on the build host or GitHub, so a
+   batch break at 1am should cost the night's builds, not the night's work.
+   (This path used to call `ScheduleWakeup({ stop: true })` outright. That
+   protected the build host correctly but ended the whole unattended run
+   with the backlog barely touched — the sentinel gets the same protection
+   without the collateral.)
+
+   The one case where the drain still stops on its own afterwards is
+   step 5 of "One tick": with batching paused, no dependency can reach
+   `status: done`, so once every remaining `pending` artifact is chained
+   behind an unbatched one, that step's deadlock report fires and the loop
+   ends gracefully. That is the correct outcome — there is genuinely nothing
+   left it can do without a human — and it reports the pause as the cause.
+
+   Step 6's commit and step 7's cleanup below still run as normal.
 6. Commit whatever status/body changes steps 4-5 produced, subject
    `backlog: batch ${buildId}`.
+
+   **Stage those files by name, and sweep the repo root first.** Run `git
+   status --porcelain` and account for every line: anything that isn't a
+   `docs/backlog/*.md` you just edited is scratch a PR agent left behind. The
+   2026-08-17 batch left `pr-body-024.md` and `scratchpad-pr-body-023.md`
+   untracked in the repo root. Delete any such file once you've confirmed its
+   content already reached the PR (`gh pr view <n> --json body`), and never
+   `git add .` or `git add -A` here — a blanket add would commit an agent's
+   scratchpad into the trunk's history.
 7. Clean up the Integrate-phase worktree and its `integration/${buildId}`
    scaffold branch, whether the batch succeeded (step 4) or failed (step 5) —
    the Integrate phase ran with `isolation: 'worktree'` and left both behind,
@@ -477,14 +695,15 @@ artifact at `status: implemented`:
    9's "not on origin" pattern in "One tick", so a human can look before
    anything is lost.
 8. Continue the loop as step 11 would have (schedule the next tick) —
-   running a batch does not itself end the drain. **Exceptions** (calling
-   `ScheduleWakeup` twice in one tick would be a bug, so skip this step if
-   either applies):
-   - Step 5's batch-wide failure path was just taken — its own text already
-     called `ScheduleWakeup({ stop: true })` above.
-   - This batch was triggered by one of the terminal-tick flushes instead of
-     step 11 — that terminal tick's own `ScheduleWakeup({ stop: true })`
-     still runs right after, per its own instructions.
+   running a batch does not itself end the drain, and since step 5 now pauses
+   batching rather than stopping, that applies to a failed batch too. Use a
+   `reason` naming the pause when step 5 was taken, e.g. `"batching paused
+   after build break, continuing to implement N pending"`. **Exception**
+   (calling `ScheduleWakeup` twice in one tick would be a bug, so skip this
+   step if it applies): this batch was triggered by one of the terminal-tick
+   flushes instead of step 11 — that terminal tick's own
+   `ScheduleWakeup({ stop: true })` still runs right after, per its own
+   instructions.
 
 ## Verifying the workflow that actually ran
 
@@ -529,16 +748,31 @@ backlog into `failed` artifacts, each one blamed for the wrong reason.
 
 **Systemic** — the workflow never really ran against this artifact:
 
+- **`systemic: true` is present on the result.** This is the authoritative
+  signal and it needs no judgement from you: `backlog-issue.js` sets it when a
+  phase agent returned `null`, which happens only when the subagent was
+  skipped or died on a terminal API error (a 529, an overloaded window, a
+  dropped connection) — never because the artifact was hard. Take the systemic
+  path even though the `reason` text mentions the artifact by name.
 - `reason` is `no artifactPath supplied`, or otherwise says the args never
   arrived. Step 7 always passes one, so this means it didn't get through.
 - The `Workflow` call threw.
 - The result is unrecognizable — not an object, or no `success` field at all.
+- Several artifacts in a row fail with the same shape while an API or GitHub
+  incident is in progress. An outage does not become a property of the
+  artifact just because the error message names one.
 
-**Per-artifact** — the workflow ran, and something about *this* issue failed:
-`implement phase failed to produce a change`, `implement phase returned an
-unexpected branch name: ...`, `a review lens did not return a result`,
-`blocking findings not addressed: ...`. These are the ones worth marking
-`failed` and triaging. (A `backlog-batch` failure at Build, Validate, or PR
+**Per-artifact** — the workflow ran, gave a real answer, and something about
+*this* issue failed: `implement phase returned an unexpected branch name: ...`,
+`blocking findings not addressed: ...` (with an actual fix result described).
+These are the ones worth marking `failed` and triaging.
+
+Note what is **no longer** per-artifact: `a review lens did not return a
+result` and `implement phase failed to produce a change` used to land here and
+mark artifacts `failed`. Both are now `systemic: true`, and the review lenses
+retry once before giving up. During the 2026-08-17 API-529 outage the old
+classification would have burned two innocent artifacts to `failed` and then
+tripped step 3's circuit breaker, blaming them for an Anthropic incident. (A `backlog-batch` failure at Build, Validate, or PR
 time is a **different** kind of failure entirely — batch-wide, not
 per-artifact, and not resolved through the `failed` status at all; see
 [Running a batch](#running-a-batch) steps 4-5.)
@@ -558,20 +792,57 @@ in flight finish (an implement+review tick just commits locally now; it no
 longer opens a PR), then halts before starting another. This works even if no
 one is watching the conversation when the sentinel is created.
 
-The loop also stops on its own for five reasons: the backlog is drained (step
-4), two consecutive artifacts failed (step 3), every remaining `pending`
-artifact is blocked on an unready dependency (step 5), a failure looked
-systemic (step 8), or a batch pass itself failed (batch-wide, not
-per-artifact — see "Running a batch" step 5). All five report before
-stopping. The first three "One tick" reasons, plus the `.stop`-sentinel stop
-above, also flush a final partial batch first if one is waiting (any artifact
-at `status: implemented`) — see each step's own instructions — so a stop
-never leaves artifacts stranded on a batch that would otherwise never
-trigger. The systemic stop (step 8) deliberately does not flush: see its own
-reasoning for why. The batch-wide-failure stop doesn't flush either — it *is*
-the flush (or the batch pass a flush would have run), and it already stopped
-because that very batch failed, so there's nothing further to flush before
-stopping.
+**An empty `.stop` does not run a batch**, on purpose — see step 1. It is the
+button you reach for when GitHub, the API, or the build host is misbehaving,
+and a flush would answer that by pushing four branches and opening four PRs
+against exactly the thing that's broken. Anything left at `status:
+implemented` is picked up by step 11 on restart, so nothing is lost by not
+flushing. If you *do* want the partial batch flushed before the halt —
+finishing a session cleanly rather than escaping a problem — put the word
+`flush` in the file instead: `echo flush > docs/backlog/.stop`.
+
+**A failed batch does not stop the drain** — it writes
+`docs/backlog/.nobatch` and keeps ticking, so the night's remaining artifacts
+still get implemented while the build break waits for a human. See
+[Pausing batching](#pausing-batching-nobatch) below.
+
+The loop stops on its own for four reasons: the backlog is drained (step 4),
+two consecutive artifacts failed (step 3), every remaining `pending` artifact
+is blocked on an unready dependency (step 5), or a failure looked systemic
+(step 8). All four report before stopping. The first three also flush a final
+partial batch first if one is waiting (any artifact at `status: implemented`)
+— see each step's own instructions — so a stop never leaves artifacts
+stranded on a batch that would otherwise never trigger. The `.stop`-sentinel
+stop does **not** flush unless the file says `flush`, and the systemic stop
+(step 8) never flushes: see each one's own reasoning. Any of these flushes
+no-ops while `.nobatch` is present.
+
+## Pausing batching (`.nobatch`)
+
+`docs/backlog/.nobatch` pauses the expensive half of the drain without
+stopping the cheap half. While it exists, every batch trigger and every
+terminal-tick flush no-ops (the guard is at the top of
+[Running a batch](#running-a-batch)), but implement ticks keep running
+normally — they commit locally and touch neither the build host nor GitHub,
+so a broken build has no bearing on whether the next artifact can be written.
+
+"Running a batch" step 5 writes it automatically on a batch-wide failure,
+recording the `buildId`, the failure reason, and the artifacts that were in
+the failed batch. Nothing removes it automatically: read it, fix or diagnose
+the break, then `rm docs/backlog/.nobatch`. The next tick that reaches the
+batch-size threshold picks up everything that accumulated at `status:
+implemented` in the meantime.
+
+You can also create it by hand — `touch docs/backlog/.nobatch` — to let a
+drain keep implementing while deliberately holding back all pushes, PRs and
+builds. That is the difference between it and `.stop`: `.stop` halts
+everything, `.nobatch` halts only what reaches outside the repo.
+
+With batching paused, no dependency can reach `status: done`, so a long
+enough pause eventually walks the backlog into step 5's dependency deadlock
+and the loop ends gracefully there, reporting the pause as the cause. That is
+the intended floor, not a bug — by then everything implementable without a
+human has been implemented.
 
 ## Before trusting an unattended run
 

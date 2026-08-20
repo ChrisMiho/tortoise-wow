@@ -25,8 +25,14 @@ const INTEGRATE_SCHEMA = {
       items: { type: 'string' },
     },
     integrationBranch: { type: 'string' },
+    // Absolute path of the worktree the Integrate agent worked in. Build and
+    // Validate both need it and neither runs with isolation: 'worktree', so
+    // without this handoff the Build agent has to rediscover (or recreate) the
+    // integration worktree itself -- which it did on 2026-08-17, wasting a
+    // phase and risking a second worktree on the same branch.
+    worktreePath: { type: 'string' },
   },
-  required: ['integrationBranch'],
+  required: ['integrationBranch', 'worktreePath'],
 }
 
 const BUILD_SCHEMA = {
@@ -147,14 +153,27 @@ const integrated = await agent(
    shipped wrong. Do not push integration/${buildId} anywhere -- it's a
    local scratch branch for the Build phase only, never a PR base.
 
-   Return the branch name you created and, if any, the artifactPath values
-   you had to exclude.`,
+   Return the branch name you created, the ABSOLUTE path of the worktree you
+   are working in with integration/${buildId} checked out (run "git rev-parse
+   --show-toplevel" inside it and return that, as worktreePath -- the Build and
+   Validate phases run outside any worktree and build/validate against this
+   path, so a missing or wrong value costs them a phase rediscovering it), and,
+   if any, the artifactPath values you had to exclude.`,
   { phase: 'Integrate', isolation: 'worktree', label: 'integrate', schema: INTEGRATE_SCHEMA }
 )
 
 if (!integrated || !integrated.integrationBranch) {
   return { success: false, reason: 'integrate phase failed to produce a branch' }
 }
+
+// Build and Validate both need the integration worktree's path. If Integrate
+// returned one, hand it over verbatim; if it didn't, tell the downstream agents
+// how to find it rather than letting them assume the main checkout (which is on
+// an unrelated branch and does NOT contain this batch's merges).
+const integrationWorktree = typeof integrated.worktreePath === 'string' ? integrated.worktreePath.trim() : ''
+const worktreeRef = integrationWorktree
+  ? `the integration worktree at "${integrationWorktree}"`
+  : `the integration worktree holding branch "${integrated.integrationBranch}" -- the Integrate phase did NOT report its path, so find it yourself with "git worktree list --porcelain" and take the "worktree <path>" line whose following "branch" line is refs/heads/${integrated.integrationBranch}. Do NOT fall back to the main checkout: it is on an unrelated branch and does not contain this batch's merges`
 
 const excluded = new Set(Array.isArray(integrated.excludedArtifacts) ? integrated.excludedArtifacts : [])
 const included = batch.filter((b) => !excluded.has(b.artifactPath))
@@ -169,15 +188,19 @@ phase('Build')
 // back to, or recognised by scripts/verify-running-commit.sh.
 const imageTag = `tortoise-cm:${buildId}`
 const built = await agent(
-  `On branch "${integrated.integrationBranch}" (in its own worktree), build the
-   Docker image per docs/superpowers/plans/2026-08-11-docker-build-from-this-checkout.md:
-   "docker build" from the repo root of that worktree. The Dockerfile already
+  `Build the Docker image from ${worktreeRef}, per
+   docs/superpowers/plans/2026-08-11-docker-build-from-this-checkout.md:
+   "docker build" from the repo root of that worktree. You are NOT running
+   inside that worktree -- pass its path as the build context, do not cd into
+   it and do not create a second worktree on the same branch (git refuses
+   that anyway). Everywhere <worktree> appears below, it means that same
+   path. The Dockerfile already
    bakes in -DBUILD_PLAYERBOTS=ON -DCMAKE_INSTALL_PREFIX=/opt/turtle and a
-   BUILD_JOBS default of 10 (the Docker VM is now 16 CPUs/24GB, see
-   docs/DOCKER.md) -- do not pass --build-arg BUILD_JOBS unless the build
-   OOMs, in which case retry with --build-arg BUILD_JOBS=4.
+   BUILD_JOBS default of 14 (the Docker VM is 16 CPUs/24GB, see docs/DOCKER.md)
+   -- do not pass --build-arg BUILD_JOBS unless the build OOMs, in which case
+   retry with --build-arg BUILD_JOBS=4.
 
-   Budget ~9.5 minutes and do not try to make it faster. There is NO incremental
+   Budget ~8.5 minutes and do not try to make it faster. There is NO incremental
    build here: "COPY . /src" does not cache-hit across builds, so every build
    recompiles all ~1169 translation units regardless of whether you changed one
    file or a hundred. Everything downstream of that COPY is invalidated before
@@ -205,9 +228,9 @@ const built = await agent(
        <worktree>
 
    An empty GIT_SHA stamps the image "unknown" -- check it is non-empty BEFORE
-   starting a ~10 minute compile, and fail immediately if it is empty.
+   starting a ~8.5 minute compile, and fail immediately if it is empty.
 
-   Run the build in the FOREGROUND and wait for it (~10 minutes). Do NOT
+   Run the build in the FOREGROUND and wait for it (~8.5 minutes). Do NOT
    background it, nohup it, or detach it. "docker build" streams from a client
    the daemon watches, so killing the client cancels the build -- a backgrounded
    build dies partway through and leaves no image and no error, just a truncated
@@ -215,13 +238,30 @@ const built = await agent(
    wsl.exe that started them exits. This has bitten more than one agent on this
    host; see docs/DOCKER.md, "Things that will cost you an afternoon".
 
-   Set your command timeout to at least 900000 ms (15 min). Measured on
-   2026-08-16, a real batch build took 10m11s wall clock -- so the obvious
-   600000 ms (10 min) is UNDER the observed build time, and the build crosses
-   it and forces the harness to hand the wait off to a background task
-   mid-compile. That handoff has held every time so far and is not the same
-   thing as backgrounding the build yourself, but do not rely on it: give the
-   command room to finish in the foreground where you can see its exit code.
+   Set the command timeout to 600000 ms, which is the Bash tool's maximum --
+   it silently clamps anything larger, so asking for 900000 gets you 600000
+   and a build killed at exactly 10m00s. The build fits: 8m15s measured
+   2026-08-17 at BUILD_JOBS=14, leaving ~90 s of margin. This is ONE
+   foreground call, not two -- do not plan for a retry.
+
+   Confirm the image actually exists before you report success. This, not the
+   exit code, is what decides built: true/false:
+
+     docker images --format '{{.Repository}}:{{.Tag}}' --filter reference=${imageTag}
+
+   If that prints ${imageTag}, the build succeeded regardless of what the exit
+   code was. If it prints nothing, the build genuinely did not produce an
+   image -- report built: false with the actual error.
+
+   ONE exit code is worth recognising: 143 (= 128 + SIGTERM) at almost exactly
+   10m00s means the command hit that 600000 ms clamp, not that anything is
+   wrong with the code. That was the normal outcome before BUILD_JOBS went to
+   14, and it should no longer happen; if you see it, the build has regressed
+   past the ceiling and that is worth reporting in failureNote whether or not
+   the image exists. In that case re-running the identical command completes
+   it -- BuildKit's layer cache survives the killed client and the second pass
+   only has to redo the export -- but treat needing that as a finding, not as
+   routine.
 
    Run "docker build" itself from Windows PowerShell directly against that
    worktree's path -- the build context is just the repo directory and needs
@@ -262,7 +302,11 @@ phase('Validate')
 const inGameChecklist = included.map((b) => `- ${b.artifactPath}`).join('\n')
 
 const validated = await agent(
-  `Check Docker readiness first: run "docker info" (from Windows PowerShell,
+  `The image ${imageTag} was built from ${worktreeRef}. Everywhere <worktree>
+   appears below, it means that path -- you are NOT running inside it, so pass
+   it explicitly to every command that needs it.
+
+   Check Docker readiness first: run "docker info" (from Windows PowerShell,
    the Windows-side CLI works even when the Ubuntu WSL distro itself can't
    see the docker command). If it's not ready or errors, return
    dockerReady: false and liveness: a one-sentence explanation, and do NOT
@@ -454,6 +498,14 @@ for (const item of included) {
      --body-file; these bodies contain backticks and newlines that do not
      survive being passed as a shell argument.
 
+     WRITE THAT FILE OUTSIDE THE REPOSITORY, in the OS temp directory --
+     "$env:TEMP\\pr-body-${buildId}.md" from PowerShell, "$TMPDIR/..." or
+     /tmp from a POSIX shell -- and DELETE it once "gh pr create" has
+     returned. Earlier runs left pr-body-*.md and scratchpad-*.md sitting
+     untracked in the repo root, where the drain's next "git status" reads
+     them as unexplained working-tree dirt and a stray "git add ." would
+     commit them. Never create any scratch file inside the working tree.
+
      Title: ${item.contested ? '"[contested] " followed by a' : 'a'} short
      summary of the fix, in this repo's existing commit-message voice.
 
@@ -461,6 +513,21 @@ for (const item of included) {
      1. The backlog artifact this implements: ${item.artifactPath}
      2. The artifact's Problem section, quoted verbatim
      3. Summary of the change made: the artifact's "**Summary:**" line
+     3b. A REQUIRED section headed "Files changed", holding the literal output
+        of:
+
+          git diff --name-status origin/${base}...${item.branchName}
+
+        one line per file, inside a fenced code block. Do not summarise it, do
+        not filter it, do not sort it, do not stop at "the interesting ones".
+        This section exists because the "**Summary:**" line above is prose an
+        agent wrote about what it MEANT to change, and on 016 it silently
+        omitted a whole set of battleground edits the diff actually contained.
+        The file list is derived from git and cannot omit anything, so it is
+        the only part of this body a reviewer can trust to be complete. If the
+        diff touches a file the Summary line does not account for, add one
+        sentence under the code block naming that file and saying the summary
+        does not cover it -- do not rewrite the Summary line to hide the gap.
      4. The artifact's Acceptance criteria section, quoted verbatim
      5. This line, verbatim: "Build: ${imageTag} — run TW_IMAGE=${imageTag}
         docker compose up against this image to test (docker-compose.yml

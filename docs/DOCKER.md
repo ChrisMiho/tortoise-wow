@@ -43,10 +43,11 @@ docker compose down          # NEVER -v — see below
 
 ## Rebuild after a C++ change
 
-Roughly 9-10 minutes with the WSL2 VM at 16 CPU / 24GB
-(`C:\Users\mihov\.wslconfig`) and `BUILD_JOBS=10` (the `Dockerfile` default —
-see `Dockerfile:23-33`). Previously ~40 minutes at the VM's original 4 CPU /
-8GB allocation with `BUILD_JOBS=2`. `scripts/rebuild.sh` builds to
+Roughly **8.5 minutes** with the WSL2 VM at 16 CPU / 24GB
+(`C:\Users\mihov\.wslconfig`) and `BUILD_JOBS=14` (the `Dockerfile` default —
+see the comment above `ARG BUILD_JOBS`). Previously ~40 minutes at the VM's
+original 4 CPU / 8GB allocation with `BUILD_JOBS=2`, and 10m11s at the `-j10`
+default that stood until 2026-08-17. `scripts/rebuild.sh` builds to
 `tortoise-cm:candidate`, runs its acceptance checks, and moves the `:local`
 tag ONLY if every one passes — so a broken build cannot take the running
 server down with it.
@@ -61,8 +62,43 @@ or detach it — see "Things that will cost you an afternoon" below. A backgroun
 build is cancelled partway through and leaves nothing behind.
 
 Every build recompiles the entire tree — **1169 translation units, every time,
-regardless of what changed**. That is why the time is ~9.5 minutes whether you
+regardless of what changed**. That is why the time is ~8.5 minutes whether you
 changed one file or a hundred.
+
+### Why the default is -j14, and why 10 minutes is a hard line
+
+`BUILD_JOBS` was 10 until 2026-08-17, on the reasoning that memory rather than
+CPU was the binding constraint: heavy translation units in this tree peak around
+1-2 GB, so 14 concurrent jobs looked like ~28 GB worst case against a 24 GB VM.
+Measured rather than reasoned, that worst case does not materialise — the peaks
+are nowhere near simultaneous. On an idle VM with the stack down:
+
+| `BUILD_JOBS` | Compile step | Full build | Result |
+|---|---|---|---|
+| 10 | 547s (9m07s) | 10m11s | killed at 10m00s, exit 143 |
+| **14** | **435.9s (7m16s)** | **8m15s** | exit 0, no OOM |
+
+~20% faster on the compile step, with zero `Killed` or
+`virtual memory exhausted` lines in the log and an identical 2.3 GB image.
+
+The reason this matters beyond convenience: **the agent harness caps a
+foreground command at 600 s and silently clamps any larger `timeout` down to
+it.** A 10m11s build was therefore killed at exactly 10m00s with **exit 143**
+(128 + SIGTERM) — during *image export*, with every layer built but never
+tagged, so `docker images` showed nothing and it read as a build that had
+vanished for no reason. Re-running the identical command completed it from
+BuildKit's surviving layer cache in ~40s, but that two-pass dance is a
+workaround for eleven seconds of overshoot, not a design. `-j14` removes it.
+
+Two caveats on the 8m15s figure:
+
+- It was measured with **no containers running**, which is how
+  `.claude/workflows/backlog-batch.js` builds (its Build phase precedes
+  Validate). Building while the stack is up with ~1000 bots resident leaves far
+  less headroom. `BUILD_JOBS=4` remains the OOM fallback.
+- Judge a build by whether the image exists
+  (`docker images --filter reference=tortoise-cm`), never by the exit code.
+  That distinction is what surfaced this in the first place.
 
 The cause, verified directly on 2026-08-16: **`COPY . /src` does not cache-hit
 across separate builds.** Build the build stage twice with an unchanged context
@@ -83,7 +119,9 @@ against the real build stage, minutes apart, or you will measure the wrong thing
 Because the miss is at the COPY, **no layer-level or compiler-level cache can
 help** — everything downstream of the COPY is invalidated before it is consulted.
 That is why ccache scored zero (below), and why the warm-builder approach is the
-one worth trying.
+one worth trying. Note that the ccache table's timings below are all `-j10`
+numbers and so read ~2 minutes slower than a current build; the finding they
+support (zero cache hits) is unaffected.
 
 **ccache does not fix this — it was measured and rejected on 2026-08-16.** Adding
 `ccache` on a BuildKit cache mount (`CMAKE_CXX_COMPILER_LAUNCHER=ccache`) produced:
@@ -183,12 +221,26 @@ docker compose up -d
 
 Set `TW_IMAGE` back to `tortoise-cm:local` once you have rebuilt a good image.
 
-### Current state: fresh slate as of 2026-08-16
+### Current state: batch images alongside the anchor, as of 2026-08-17
 
-Every image was deleted to start the tournament work clean — 30 images and one
-stale build container, ~75 GB. **`tortoise-cm:c06b2fb` is the only image left**,
-kept deliberately as the rollback anchor, and `.env` points `TW_IMAGE` at it
-because `tortoise-cm:local` no longer exists.
+Every image was deleted on 2026-08-16 to start the tournament work clean — 30
+images and one stale build container, ~75 GB — leaving `tortoise-cm:c06b2fb`
+alone as the rollback anchor. The backlog drain has since added one
+`tortoise-cm:<buildId>` image per successful batch (`20260816-1`,
+`20260817-1`, `20260817-2`), each built and validated from an
+`integration/<buildId>` merge of that batch's branches.
+
+**`.env` now points `TW_IMAGE` at the newest validated batch image, not at the
+anchor.** That is deliberate: `backlog-batch` validates with `--keep-up` and
+leaves the stack running on the image it just built, so pinning `.env` to the
+anchor meant any later restart silently dropped the server back to code that
+predates the whole tournament series, and an implement tick could not test a
+single command this series added. `.claude/skills/backlog-drain/SKILL.md`
+("Running a batch", step 4a) bumps that line after each successful batch.
+
+`tortoise-cm:c06b2fb` stays on the host untouched and is still the rollback
+target — the `.env` comment names it, so rolling back is one `sed` (below),
+not a search through image history.
 
 Consequences worth knowing before the first build:
 
