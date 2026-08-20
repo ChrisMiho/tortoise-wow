@@ -216,15 +216,38 @@ const implemented = await agent(
       match in progress is still lost, and db is restart:"no".
    4. DO NOT run a Docker build. There is no incremental build here -- "COPY .
       /src" never cache-hits, so every build recompiles all ~1169 translation
-      units and takes ~9.5 minutes no matter what changed. A later
+      units and takes ~8.5 minutes no matter what changed. A later
       backlog-batch pass builds this branch together with its batch; that is
       the compile gate, and running one here just burns ten minutes.
-   5. Because of 4, THE ONLY SERVER IMAGE ON THIS HOST IS A ROLLBACK ANCHOR
-      THAT PREDATES EVERY UNMERGED CHANGE. Existing commands (rndbot, .bg, and
-      anything already on cm-main) work against it. Any console command added
-      by this backlog series does NOT exist in it, so "there is no such
-      subcommand" against a running server proves nothing about your code --
-      do not treat it as a failure, and do not rewrite working code chasing it.
+   5. Because of 4, THE RUNNING SERVER IS ALWAYS AN OLDER BUILD THAN YOUR
+      BRANCH -- but it is NOT necessarily the rollback anchor, and the
+      difference decides whether a failed command means anything. Find out
+      which image you are actually talking to before drawing any conclusion
+      from a console response:
+
+        docker ps --format '{{.Names}} {{.Image}}'
+        docker images --format '{{.Repository}}:{{.Tag}}' --filter reference=tortoise-cm
+
+      A backlog-batch pass validates each batch with --keep-up, so it leaves
+      the stack UP on tortoise-cm:<buildId>, and .env's TW_IMAGE tracks that
+      same tag. That image contains every artifact batched before yours --
+      including this series' own tournament commands and scripts. So:
+      - A command from an EARLIER artifact in this series (e.g. "tournament
+        team", "tournament instance") SHOULD work against it. If it does not,
+        that is a real finding worth reporting, not an expected absence.
+      - A command added by THIS artifact does NOT exist in any image on this
+        host, because nothing has compiled your branch yet. "There is no such
+        subcommand" for your own new command proves nothing about your code:
+        do not treat it as a failure and do not rewrite working code chasing
+        it.
+      - tortoise-cm:c06b2fb is the rollback anchor and predates the whole
+        series. If that is what is running, only cm-main commands (rndbot,
+        .bg) work, and everything from this series is legitimately absent.
+      Exercise what you can against whatever is actually running -- shell
+      scripts under scripts/tournament/ and any console command that already
+      shipped are testable right now, and testing them is better evidence than
+      reasoning about them. Never "fix" the running server by building; that
+      is rule 4.
    6. Run scripts from WSL, never Git Bash: jq is absent from Git Bash on this
       host and require_cmd hard-exits, and MSYS rewrites POSIX paths into C:\
       ones. Do NOT put a variable inside a wrapped "wsl -d Ubuntu -- bash -lc
@@ -288,7 +311,16 @@ const implemented = await agent(
 )
 
 if (!implemented) {
-  return { success: false, reason: 'implement phase failed to produce a change' }
+  // Same reasoning as the review-lens null below: agent() returns null only
+  // when the subagent was skipped or died on a terminal API error, never
+  // because the artifact was hard. Nothing here is evidence against
+  // ${artifactLabel}, so this must not become a per-artifact `failed`.
+  return {
+    success: false,
+    systemic: true,
+    reason: `implement phase returned no result at all for ${artifactLabel} -- the subagent died on a terminal API error or was skipped, `
+      + `which is not a statement about this artifact. Do NOT mark it failed; leave it pending and check API health before resuming.`,
+  }
 }
 
 if (implemented.blocked === true) {
@@ -365,9 +397,50 @@ const reviews = await parallel(lenses.map((lens) => () =>
   )
 ))
 
-const returnedReviews = reviews.filter(Boolean)
+// agent() returns null when a subagent dies on a terminal API error after its
+// own retries -- an Anthropic 529, a network blip, an overloaded window. That
+// says nothing whatsoever about this artifact, but the original code returned a
+// plain success: false here, which backlog-drain classes as a PER-ARTIFACT
+// failure: the artifact gets status: failed, and two such nulls in a row trip
+// the circuit breaker. During the API-529 outage on 2026-08-17 that would have
+// burned two innocent artifacts to `failed` and stopped the loop blaming them.
+//
+// So: retry the missing lenses once (the outage is usually shorter than a lens
+// run), and if they still come back empty, return a SYSTEMIC-shaped result.
+// backlog-drain's "Systemic vs. per-artifact failures" section keys on the
+// systemic: true flag and puts the artifact back to pending untouched.
+let returnedReviews = reviews.filter(Boolean)
 if (returnedReviews.length < lenses.length) {
-  return { success: false, reason: 'a review lens did not return a result', branchName }
+  log(`${lenses.length - returnedReviews.length} review lens(es) returned nothing -- retrying once before treating it as a failure`)
+  const retried = await parallel(lenses.map((lens, i) => () =>
+    reviews[i]
+      ? Promise.resolve(reviews[i])
+      : agent(
+          `${lens.prompt}
+
+           Branch "${branchName}" has the change. Run
+           "git diff origin/${BASE_BRANCH}...${branchName}" from wherever you
+           are. Artifact for context: ${artifactPath}.
+
+           Report every real finding with a one-sentence summary, a
+           REPO-RELATIVE file path, and a severity of "blocking" or "minor".
+           An empty findings array is the correct and complete answer if your
+           review dimension does not apply to this diff. Do not set
+           blocked: true to express that your lens is irrelevant.`,
+          { phase: 'Review', label: `review:${lens.key}:retry`, schema: REVIEW_SCHEMA, effort: 'medium' }
+        )
+  ))
+  returnedReviews = retried.filter(Boolean)
+}
+if (returnedReviews.length < lenses.length) {
+  return {
+    success: false,
+    systemic: true,
+    reason: `a review lens returned no result twice in a row (${returnedReviews.length}/${lenses.length} lenses reported). `
+      + `A null from agent() is a terminal API error -- an overloaded/529 window or a dropped connection -- not a defect in `
+      + `${artifactLabel}. Do NOT mark this artifact failed: leave it pending, and check whether the API is healthy before resuming.`,
+    branchName,
+  }
 }
 
 const allFindings = returnedReviews.flatMap((r) => r.findings || [])
@@ -406,8 +479,20 @@ if (blocking.length > 0) {
     { phase: 'Review', label: 'apply-fixes', schema: FIX_SCHEMA }
   )
   const hasRebuttal = fixResult && Array.isArray(fixResult.unresolved) && fixResult.unresolved.length > 0
-  if (!fixResult || (fixResult.fixed !== true && !hasRebuttal)) {
-    // No usable result at all -- not a defensible disagreement, a broken fix attempt.
+  if (!fixResult) {
+    // Null, not a bad answer: the fix subagent died on a terminal API error.
+    // Systemic, same carve-out as the Implement and Review nulls above.
+    return {
+      success: false,
+      systemic: true,
+      reason: `the apply-fixes agent returned no result at all for ${artifactLabel} -- a terminal API error, not a verdict on the findings. `
+        + `Do NOT mark this artifact failed; leave it pending and check API health before resuming.`,
+      branchName,
+    }
+  }
+  if (fixResult.fixed !== true && !hasRebuttal) {
+    // A real answer that fixed nothing and argued nothing -- genuinely this
+    // artifact's failure, and correctly per-artifact.
     return { success: false, reason: `blocking findings not addressed: ${describe(fixResult)}`, branchName }
   }
   if (fixResult.fixed !== true) {
