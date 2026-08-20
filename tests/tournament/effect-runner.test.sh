@@ -161,10 +161,10 @@ assert_eq "prompt" "$( [ $((T1 - T0)) -lt 30 ] && echo prompt || echo "stalled $
 # re-apply everything match one already handled. `ctl` comes from a stub, so
 # every count below is about the consumer's bookkeeping and not the world.
 QUEUE="$TMP/shared.ndjson"; : > "$QUEUE"
-cat > "$TMP/ctlstub.sh" <<'CTL'
-ctl() { printf 'TOURNAMENT %s ok=1\n' "$*"; }
-ctl_field() { printf '%s\n' "$1" | sed -n "s/.*[[:space:]]$2=\\([^[:space:]]*\\).*/\\1/p" | head -1; }
-CTL
+# The shared fixture, not a local `ok=1` one-liner: effect_apply sends a whole
+# batch down one attach and reads a verdict per target out of the reply, so a
+# stub that answers ok=1 once for the batch fails every target in it.
+cp "$ROOT/tests/fixtures/ctl-stub.sh" "$TMP/ctlstub.sh"
 
 bash "$ROOT/scripts/tournament/effect-queue.sh" --queue "$QUEUE" \
      --effect heal_player --team "$ATEAM" --slot one >/dev/null

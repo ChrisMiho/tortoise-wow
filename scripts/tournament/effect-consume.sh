@@ -177,6 +177,13 @@ fi
 lock_hold()    { [ "$HAVE_FLOCK" -eq 1 ] && flock 9; return 0; }
 lock_release() { [ "$HAVE_FLOCK" -eq 1 ] && flock -u 9; return 0; }
 
+# lib/effects.sh records the tier each upgrade actually reached in
+# <state>/tiers.txt, which is what stops a second upgrade_*_player re-equipping
+# the tier the bot is already wearing. Per state dir -- that is, per match --
+# exactly like applied.txt and counts.txt, and for the same reason: it must
+# survive a consumer restart mid-match, and must not leak into the next one.
+export EFFECT_STATE_DIR="$STATE"
+
 # A case, not `eval "\$LIMIT_$1"`. The effect name comes off the queue, which an
 # adapter fills from chat, and an eval'd one is arbitrary code running as
 # whoever operates the tournament. The default arm is fail-closed rather than

@@ -55,10 +55,10 @@ assert_eq "$whole" "$halves" \
 
 # --- effect validation and targeting ----------------------------------------
 #
-# Validation and targeting only. effect_apply's own path talks to the control
-# plane, which needs a running world, so it is deliberately not exercised here:
-# these cases are the half that must hold before any command is allowed near a
-# live match, and they hold with nothing standing up.
+# Validation and targeting first: the half that must hold before any command is
+# allowed near a live match, and it holds with nothing standing up. effect_apply
+# itself is exercised at the bottom of this file against the stub control plane
+# in tests/fixtures/ctl-stub.sh, so no world is needed for that either.
 . "$ROOT/scripts/tournament/lib/team.sh"
 . "$ROOT/scripts/tournament/lib/effects.sh"
 export TEAM_DIR="$ROOT/config/tournament/teams"
@@ -154,10 +154,7 @@ rm -f "$q"
 # everything -- which makes every assertion below about the consumer's own
 # bookkeeping, not about the control plane.
 q2="$(mktemp)"; st="$(mktemp -d)"
-cat > "$st/ctlstub.sh" <<'STUB'
-ctl() { printf 'TOURNAMENT %s ok=1\n' "$*"; }
-ctl_field() { printf '%s\n' "$1" | sed -n "s/.*[[:space:]]$2=\\([^[:space:]]*\\).*/\\1/p" | head -1; }
-STUB
+cp "$ROOT/tests/fixtures/ctl-stub.sh" "$st/ctlstub.sh"
 
 idA="$(bash "$ROOT/scripts/tournament/effect-queue.sh" --queue "$q2" \
         --effect heal_player --team stormwind-sentinels --slot one)"
@@ -214,10 +211,7 @@ assert_contains "$OUT3" "ratelimited=2" \
 # the dedupe. All five run against CTL_STUB, so no world stands up.
 
 q3="$(mktemp)"; st3="$(mktemp -d)"
-cat > "$st3/ctlstub.sh" <<'STUB'
-ctl() { printf 'TOURNAMENT %s ok=1\n' "$*"; }
-ctl_field() { printf '%s\n' "$1" | sed -n "s/.*[[:space:]]$2=\\([^[:space:]]*\\).*/\\1/p" | head -1; }
-STUB
+cp "$ROOT/tests/fixtures/ctl-stub.sh" "$st3/ctlstub.sh"
 
 bash "$ROOT/scripts/tournament/effect-queue.sh" --queue "$q3" \
      --effect kill_team --team orgrimmar-warsong >/dev/null
@@ -266,36 +260,34 @@ assert_eq "2" "$(grep -cxF kill_team "$st4/counts.txt")" \
 # kill_team's cap of 2 never engaging. The count keys on "at least one target
 # landed" instead, which is the applied=<n> on effect_apply's own EFFECT line.
 q7="$(mktemp)"; st7="$(mktemp -d)"
-cat > "$st7/ctlstub.sh" <<'STUB'
-ctl() {
-    case "$*" in
-        *one) printf 'TOURNAMENT %s ok=0 reason=offline\n' "$*" ;;
-        *)    printf 'TOURNAMENT %s ok=1\n' "$*" ;;
-    esac
-}
-ctl_field() { printf '%s\n' "$1" | sed -n "s/.*[[:space:]]$2=\\([^[:space:]]*\\).*/\\1/p" | head -1; }
-STUB
+cp "$ROOT/tests/fixtures/ctl-stub.sh" "$st7/ctlstub.sh"
 for i in 1 2 3 4 5; do
   bash "$ROOT/scripts/tournament/effect-queue.sh" --queue "$q7" \
        --effect kill_team --team orgrimmar-warsong >/dev/null
 done
-OUT7="$(CTL_STUB="$st7/ctlstub.sh" bash "$ROOT/scripts/tournament/effect-consume.sh" \
+OUT7="$(CTL_KILL_FAIL=Wsghone CTL_STUB="$st7/ctlstub.sh" \
+        bash "$ROOT/scripts/tournament/effect-consume.sh" \
         --queue "$q7" --alliance stormwind-sentinels --horde orgrimmar-warsong \
         --state "$st7" --once 2>&1)"
 assert_eq "2|2|ratelimited=3" \
   "$(grep -c 'applied=9 failed=1' <<< "$OUT7")|$(grep -cxF kill_team "$st7/counts.txt")|$(sed -n 's/^CONSUME .*\(ratelimited=[0-9]*\).*/\1/p' <<< "$OUT7")" \
   "a wipe that landed on nine of ten bots spends cap: the third is rate limited"
 
-# A consumer killed partway through a kill_team's ten ctl calls. The id used to
-# be appended only after effect_apply returned, so the next pass replayed the
-# whole wipe -- ten bots killed twice off one purchase.
+# A consumer killed while a kill_team is in flight. The id used to be appended
+# only after effect_apply returned, so the next pass replayed the whole wipe --
+# ten bots killed twice off one purchase.
+#
+# A team effect is ONE attach carrying ten commands, so the kill has to land on
+# that single call; an earlier version of this stub died on its fourth ctl(),
+# which batching made unreachable and the case vacuous. The world has already
+# received the batch when the consumer dies, which is exactly the state the
+# claim-before-send ordering exists for.
 q5="$(mktemp)"; st5="$(mktemp -d)"
 cat > "$st5/ctlstub.sh" <<'STUB'
 ctl() {
     n=$(cat "$CTL_COUNT" 2>/dev/null || echo 0); n=$((n + 1))
     printf '%s\n' "$n" > "$CTL_COUNT"
-    [ "$n" -lt 4 ] || kill -9 $$
-    printf 'TOURNAMENT %s ok=1\n' "$*"
+    kill -9 $$
 }
 ctl_field() { printf '%s\n' "$1" | sed -n "s/.*[[:space:]]$2=\\([^[:space:]]*\\).*/\\1/p" | head -1; }
 STUB
@@ -320,26 +312,33 @@ assert_eq "0" "$(grep -c '^EFFECT ' <<< "$OUT5")" \
 
 # Two consumers on one --state dir: an operator restarting the loop without
 # killing the old one. Unlocked, both read applied.txt before either appends to
-# it, both miss the id, and both wipe the same team. The stub logs every ctl
-# call and sleeps, so the window the two overlap in is wide, not theoretical.
+# it, both miss the id, and both wipe the same team. The stub sleeps before
+# answering, so the window the two overlap in is wide, not theoretical.
+#
+# The double-wipe is counted in ATTACHES, not in ctl() arguments. A team effect
+# sends its ten commands down one attach, so one wipe is one line in the attach
+# log and a second consumer that slipped past the lock would make it two.
 q6="$(mktemp)"; st6="$(mktemp -d)"
 cat > "$st6/ctlstub.sh" <<'STUB'
-ctl() { printf '%s\n' "$*" >> "$CTL_LOG"; sleep 0.05; printf 'TOURNAMENT %s ok=1\n' "$*"; }
-ctl_field() { printf '%s\n' "$1" | sed -n "s/.*[[:space:]]$2=\\([^[:space:]]*\\).*/\\1/p" | head -1; }
+. "$TEST_ROOT/tests/fixtures/ctl-stub.sh"
+# Rename the fixture's ctl before shadowing it -- bash resolves a function body
+# at call time, so a wrapper that called `ctl` would call itself forever.
+eval "ctl_fixture() $(declare -f ctl | tail -n +2)"
+ctl() { sleep 0.05; ctl_fixture "$@"; }
 STUB
 : > "$st6/ctl.log"
 bash "$ROOT/scripts/tournament/effect-queue.sh" --queue "$q6" \
      --effect kill_team --team orgrimmar-warsong >/dev/null
 for i in 1 2; do
-  CTL_LOG="$st6/ctl.log" CTL_STUB="$st6/ctlstub.sh" \
+  TEST_ROOT="$ROOT" CTL_ATTACH_LOG="$st6/ctl.log" CTL_STUB="$st6/ctlstub.sh" \
       bash "$ROOT/scripts/tournament/effect-consume.sh" --queue "$q6" \
       --alliance stormwind-sentinels --horde orgrimmar-warsong \
       --state "$st6" --once >/dev/null 2>&1 &
 done
 wait
-assert_eq "10|1" \
+assert_eq "1|1" \
   "$(wc -l < "$st6/ctl.log" | tr -d ' ')|$(wc -l < "$st6/applied.txt" | tr -d ' ')" \
-  "two consumers on one state dir apply the kill exactly once: ten ctl calls, one id"
+  "two consumers on one state dir apply the kill exactly once: one attach, one id"
 
 # A value-taking flag as the final argument used to spin the argument loop
 # forever -- `shift 2` cannot shift with one argument left, so $# never
@@ -362,5 +361,110 @@ assert_eq "2" "$QRC" \
 rm -rf "$q3" "$st3" "$q4" "$st4" "$q5" "$st5" "$q6" "$st6"
 
 rm -rf "$q2" "$st"
+
+# --- the applier: verdicts, tier bookkeeping and the attach count ------------
+#
+# effect_apply against the stub control plane in tests/fixtures/ctl-stub.sh,
+# which answers in the same shape TournamentCommands.cpp does -- one ok= line per
+# item and then an `equipped=<n> failed=<n>` summary. That shape is the point:
+# the applier used to call any `ok=1` anywhere in the reply a success, so a bot
+# that got one item of thirteen was recorded in applied.txt and deduped away for
+# good, and the viewer who paid for it was never told.
+. "$ROOT/tests/fixtures/ctl-stub.sh"
+
+st2="$(mktemp -d)"
+export EFFECT_STATE_DIR="$st2"
+export CTL_ATTACH_LOG="$st2/attaches"
+: > "$CTL_ATTACH_LOG"
+
+attaches() { wc -l < "$CTL_ATTACH_LOG" | tr -d ' '; }
+
+UPG='{"id":"u1","ts":"2026-08-16T21:00:00Z","effect":"upgrade_armor_player","target":{"team":"stormwind-sentinels","slot":"one"},"source":"mock"}'
+
+# 1. A PARTIAL EQUIP IS A FAILURE. One item of twelve went on; the summary says
+# failed=11. Both halves asserted together, because a non-zero exit with an
+# applied=1 line would still have the consumer record it as done.
+CTL_EQUIP_OK=1
+OUT="$(effect_apply "$UPG" stormwind-sentinels orgrimmar-warsong 2>/dev/null)"; RC=$?
+unset CTL_EQUIP_OK
+assert_eq "1|applied=0 failed=1" \
+  "$RC|$(printf '%s\n' "$OUT" | grep -o 'applied=[0-9]* failed=[0-9]*')" \
+  "a partial equip is reported as a failure, not a success"
+
+# And nothing is recorded: a tier the bot never actually got must not advance the
+# ladder, or the retry after a refund would skip straight past it.
+assert_eq "0" "$(grep -c 'Wsgaone|armor|' "$st2/tiers.txt" 2>/dev/null || echo 0)" \
+  "a partial equip records no tier"
+
+# 2. A clean equip succeeds and the tier it reached is written down.
+OUT="$(effect_apply "$UPG" stormwind-sentinels orgrimmar-warsong 2>/dev/null)"; RC=$?
+assert_eq "0|applied=1 failed=0" \
+  "$RC|$(printf '%s\n' "$OUT" | grep -o 'applied=[0-9]* failed=[0-9]*')" \
+  "a full equip succeeds"
+
+assert_eq "Wsgaone|armor|upgrade" "$(tail -1 "$st2/tiers.txt")" \
+  "and the tier actually reached is recorded per bot and per half"
+
+# 3. THE SECOND UPGRADE IS NOT A SILENT RE-EQUIP. It used to read the current
+# tier from the team's .gearTier, which nothing updates, so it re-sent the tier
+# the bot was already wearing and answered ok=1. Now the recorded tier is read
+# instead: the warrior-tank fixture has nothing above `upgrade`, so this is a
+# distinct refusal with no command sent at all.
+before="$(attaches)"
+ERR="$(effect_apply "$UPG" stormwind-sentinels orgrimmar-warsong 2>&1 >/dev/null)"; RC=$?
+assert_contains "$ERR" "already_top_tier(upgrade)" \
+  "a second upgrade on the same bot reports the tier it stopped at"
+
+assert_eq "$before" "$(attaches)" \
+  "and sends no equip at all -- never the same tier a second time"
+
+# 4. ONE ATTACH FOR TEN TARGETS. mangosd reads console EOF as "shut down the
+# world", so ten attaches for one heal_team was ten chances to do exactly that;
+# gear-apply.sh and roster.sh both batch, and this is the assertion that says so.
+before="$(attaches)"
+HEALTEAM='{"id":"h1","ts":"2026-08-16T21:00:00Z","effect":"heal_team","target":{"team":"stormwind-sentinels"},"source":"mock"}'
+OUT="$(effect_apply "$HEALTEAM" stormwind-sentinels orgrimmar-warsong 2>/dev/null)"; RC=$?
+assert_eq "1" "$(( $(attaches) - before ))" \
+  "a _team effect opens exactly ONE console attach for all ten targets"
+
+assert_eq "0|applied=10 failed=0" \
+  "$RC|$(printf '%s\n' "$OUT" | grep -o 'applied=[0-9]* failed=[0-9]*')" \
+  "and all ten targets are still judged individually from that one reply"
+
+# 5. THE SAME HOLDS WITH NO STATE DIR AT ALL. effect_tier_file's fallback used
+# to mktemp into a variable, but every reader reaches it through a command
+# substitution, so the assignment died with the subshell and each call got a
+# fresh empty record -- two upgrade_armor_player on one bot both answered
+# applied=1, re-equipping the tier it already wore, which is defect 2 alive in
+# the path the comment promised was safe. Asserted here without EFFECT_STATE_DIR
+# because that is the only configuration that exercises the fallback.
+unset EFFECT_STATE_DIR
+TF="$(effect_tier_file)"
+assert_eq "$TF" "$(effect_tier_file)" \
+  "with no state dir the tier file has ONE path per run, not one per call"
+
+# And the same path when asked for from inside a subshell -- which is where
+# every read of the record actually happens.
+assert_eq "$TF" "$( ( effect_tier_file ) )" \
+  "and a subshell resolves it to that same path"
+
+rm -f "$TF"
+NOSTATE='{"id":"u2","ts":"2026-08-16T21:00:00Z","effect":"upgrade_armor_player","target":{"team":"stormwind-sentinels","slot":"one"},"source":"mock"}'
+OUT="$(effect_apply "$NOSTATE" stormwind-sentinels orgrimmar-warsong 2>/dev/null)"; RC=$?
+assert_eq "0|applied=1 failed=0" \
+  "$RC|$(printf '%s\n' "$OUT" | grep -o 'applied=[0-9]* failed=[0-9]*')" \
+  "the first upgrade with no state dir still succeeds"
+
+before="$(attaches)"
+ERR="$(effect_apply "$NOSTATE" stormwind-sentinels orgrimmar-warsong 2>&1 >/dev/null)"; RC=$?
+assert_contains "$ERR" "already_top_tier(upgrade)" \
+  "and the second one is refused, not silently re-equipped, with no state dir"
+
+assert_eq "$before" "$(attaches)" \
+  "and it sends no equip either"
+
+rm -f "$TF"
+unset CTL_ATTACH_LOG
+rm -rf "$st2"
 
 assert_summary
