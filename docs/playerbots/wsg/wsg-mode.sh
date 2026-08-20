@@ -17,11 +17,15 @@ MGCONF="${WSG_SERVER_ROOT}/etc/mangosd.conf"
 
 # The SHIPPED defaults, read from the source tree rather than hardcoded here.
 # Only `off --profile alive-world` uses them — the fallback for when no snapshot
-# exists. They were literals, and they went stale: the compiled pool default moved
-# from 200 to 1000 (aiplayerbot.conf.dist.in:57-58) and DisableActivityPriorities
-# from 0 to 1, so the "documented alive-world profile" quietly restored a world a
-# fifth of its intended size. Reading the .dist.in means the next such change lands
-# here for free. SCRIPT_DIR is docs/playerbots/wsg, so the repo root is three up.
+# exists. They were literals in THIS script, and they went stale: the pool literal
+# here still read 200 and DisableActivityPriorities 0 long after the project had
+# moved on. aiplayerbot.conf.dist.in:57-58 has shipped MinRandomBots =
+# MaxRandomBots = 1000 all along; what changed was the compiled fallback in
+# PlayerbotAIConfig.cpp:260-261, raised from 200 to 1000 to agree with it. So the
+# stale literals here meant the "documented alive-world profile" quietly restored
+# a world a fifth of its intended size. Reading the .dist.in means the next
+# such change lands here for free. SCRIPT_DIR is docs/playerbots/wsg, so the
+# repo root is three up.
 REPO_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
 DIST_AICONF="${WSG_DIST_AICONF:-$REPO_ROOT/src/modules/PlayerBots/playerbot/aiplayerbot.conf.dist.in}"
 DIST_MGCONF="${WSG_DIST_MGCONF:-$REPO_ROOT/src/mangosd/mangosd.conf.dist.in}"
@@ -225,7 +229,16 @@ JSON
       AutoDoQuests="$ABSENT"
       # Not a conf key — tw_logon.account.rank. 3 = DEVELOPER, the everyday value.
       GmRank=3
-      echo "  pool ${MinRandomBots}/${MaxRandomBots} (from ${DIST_AICONF})"
+      # Say which of the two sources the numbers actually came from. dist_default
+      # silently falls back to its literal when the source tree is not next to
+      # the script — the copied-to-the-server-host case these literals exist
+      # for — and naming the .dist.in there claims a read that never happened.
+      if [[ -n "$(conf_get "$DIST_AICONF" AiPlayerbot.MinRandomBots)" ]]; then
+        POOL_SRC="read from ${DIST_AICONF}"
+      else
+        POOL_SRC="compiled-in literal; no value in ${DIST_AICONF}"
+      fi
+      echo "  pool ${MinRandomBots}/${MaxRandomBots} (${POOL_SRC})"
     else
       get() { grep -o "\"$1\": *\"[^\"]*\"" "$SNAP" | sed 's/.*: *"//; s/"$//'; }
       MinRandomBots="$(get MinRandomBots)";           MaxRandomBots="$(get MaxRandomBots)"
