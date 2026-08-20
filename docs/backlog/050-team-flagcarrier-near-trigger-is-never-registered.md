@@ -1,5 +1,5 @@
 ---
-status: pending
+status: done
 risk: low
 area: playerbots/battlegrounds
 depends-on:
@@ -59,3 +59,21 @@ node), `strategy/triggers/PvpTriggers.h` / `.cpp` (the trigger class itself).
 - The same failure shape is already measured on this server: an `isUseful()`
   gate made `bg join` never run — 0/3 commanded joins before the fix, 8/8 after
   (`docs/playerbots/WSG-BOT-MATCH.md` §3).
+
+**Base:** cm-main
+
+**Branch:** backlog/team-flagcarrier-near-trigger-is-never-registered
+
+**Summary:** Registered the missing `"team flagcarrier near"` trigger creator in `src/modules/PlayerBots/playerbot/strategy/triggers/TriggerContext.h`, immediately after `"enemy flagcarrier near"`, so `AiObjectContext::GetTrigger("team flagcarrier near")` now returns a real `TeamFlagCarrierNear` instead of nullptr and `Engine::ProcessTriggers` stops silently `continue`-ing past any node that names it. The `bg protect fc` trigger node in `src/modules/PlayerBots/playerbot/strategy/generic/BattlegroundStrategy.cpp` is deliberately left commented out: it lives on `BattlegroundStrategy::InitNonCombatTriggers`, the same ladder whose mover `bg move to objective` runs at relevance 1.0f, so restoring it at 40.0f would outrank the mover whenever a bot's own flag carrier is in visibility range and deepen the starvation recorded in artifact 046. A comment above the block now states that the trigger is registered, why the node stays disabled, and that any restore must pick a relevance below the mover or move the node onto the combat ladder. No behaviour change to a running server, no SQL migration, and the action `bg protect fc` was already registered in `ActionContext.h`.
+
+**In-game check:** This change alters no bot behaviour on its own — the `bg protect fc` node stays commented out — so the in-game check is the generic smoke test plus one negative-regression check, and most of it is scriptable from logs rather than needing a human in the world.
+
+Scriptable / log-observable:
+1. Server starts: `docker compose --env-file <main-checkout>/.env up -d` with the batch-built image; confirm mangosd reaches "World initialized" and accepts logins. A bad trigger registration would be a compile error, not a runtime one, so a successful build is most of the proof.
+2. Spawn bots (`rndbot add 20` via `wsg_console`) and confirm `bots.log` shows normal per-bot trigger/action lines with no new error or warning mentioning `team flagcarrier near`.
+3. Run one WSG match (`.bg` / the tournament harness) and confirm `bg.log` still records a decisive or timed-out match and that `bots.log` still shows `A:bg move to objective` lines at the usual rate — this is the regression check that registering the trigger did not accidentally activate a competing action. Expect ZERO `A:protect fc` lines: the node is disabled, so their absence is the expected result, not a failure.
+
+Manual, only if someone wants to confirm the intent by hand:
+4. Watch a WSG match as a GM (`.gm on`, `.go` to the WSG flag rooms). Bots should behave exactly as before this change — the flag carrier crosses the field with no dedicated escort, and non-carrier bots keep pushing to objectives rather than trailing the carrier. Any bot suddenly Follow()-ing its own flag carrier would mean the node got re-enabled by mistake.
+
+**Result:** PR opened at https://github.com/ChrisMiho/tortoise-wow/pull/64, build tortoise-cm:20260819-1.
