@@ -20,6 +20,9 @@
 # backlog-drain stop sentinel: user-created, deleted once honored, never meant to be committed
 /docs/backlog/.stop
 
+# Personal Claude Code profile for elevated dev-tool access (docker/cmake/python — not
+# bypassed; see docs/superpowers/plans/2026-08-13-claude-settings-profiles.md)
+/.claude/settings.dev.json
 
 # Local Docker environment — contains the database password.
 .env
