@@ -121,6 +121,17 @@ pipe_status=$?
 
 rows="$(wc -l < "$BODY" | tr -d ' ')"
 if [ "$rows" -eq 0 ]; then
+    # Exiting without touching $OUT is not enough. Nothing here owns that path,
+    # so a CSV an EARLIER successful run left at it survives this failure whole,
+    # and a downstream reader that only checks the file -- match-run.sh's report
+    # step is exactly that -- reads the previous instance's telemetry as this
+    # instance's. Removing it makes the absent file agree with the exit code.
+    if [ -e "$OUT" ]; then
+        rm -f "$OUT" || {
+            echo "FATAL: no samples for instance $INSTANCE, and the stale $OUT could not be removed" >&2
+            exit 2; }
+        echo "NOTE: removed the stale $OUT left by an earlier run" >&2
+    fi
     echo "FATAL: no telemetry samples for instance $INSTANCE in $LOG" >&2
     echo "       Tournament.TelemetryIntervalMs is probably unset or 0, which disables" >&2
     echo "       sampling entirely -- or it was set but mangosd was not restarted" >&2

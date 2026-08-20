@@ -16,6 +16,10 @@
 ITEMDB_CONTAINER="${ITEMDB_CONTAINER:-${DB_CONTAINER:-tcm-db}}"
 ITEMDB_WORLD="${ITEMDB_WORLD:-tw_world}"
 
+# The columns every equip check reads, in one fixed order, so the SELECT and the
+# `read` that unpacks it cannot drift apart.
+ITEMDB_EQUIP_COLUMNS='class, subclass, inventory_type, required_level, allowable_class, allowable_race, required_skill, required_spell, required_honor_rank, required_reputation_faction, flags, extra_flags, max_count'
+
 # Deliberately NOT wsg_mysql from docs/playerbots/wsg/lib/wsg-bots-common.sh:
 # that helper sends mysql's stderr to /dev/null, so a query that fails returns an
 # empty string and reads exactly like "this server has no item for that slot".
@@ -185,4 +189,84 @@ itemdb_candidates() { # <classId> <slot> <quality> <maxItemLevel> <limit>
                     AND (extra_flags & 0x04) = 0
                   ORDER BY $order
                   LIMIT $limit;"
+}
+
+# --- can this class actually wear one specific item? ------------------------
+#
+# itemdb_candidates picks; this JUDGES, one entry at a time, and names the
+# reason. The generator runs it over every id it is about to write, so an
+# inequippable pick is refused with a reason AT GENERATION TIME instead of
+# surfacing as `reason=cannot_equip(<n>)` from `tournament equip` a day later,
+# in a console transcript, with nothing but a number to go on.
+#
+# The two failures measured on this host on 2026-08-19 are both in here:
+#
+#   cannot_equip(8)  = EQUIP_ERR_NO_REQUIRED_PROFICIENCY. Player::CanUseItem
+#                      (Player.cpp:12080-12088) refuses any item whose
+#                      ItemPrototype::GetProficiencySkill() the character has no
+#                      skill in. Caught below as no_armor_proficiency /
+#                      no_weapon_proficiency.
+#   cannot_equip(17) = EQUIP_ERR_CANT_CARRY_MORE_OF_THIS, from
+#                      CanTakeMoreSimilarItems (Player.cpp:10806-10828) on an
+#                      item with max_count > 0 the bot ALREADY wears -- the three
+#                      unique picks in the shipped tiers are 2540 Gamemaster's
+#                      Blade of Silence, 2543 Gamemaster's Medallion and 12846
+#                      Argent Dawn Commission. That one is NOT judged here and
+#                      max_count is deliberately not filtered above: a unique item
+#                      is perfectly wearable, it is only the SECOND application to
+#                      the same bot that fails, and on this world 12846 is the only
+#                      white trinket there is -- filtering it out empties the
+#                      trinket slot for every class and aborts generation outright.
+#                      Re-application is the equip command's problem and is fixed
+#                      there (HandleTournamentEquipCommand destroys the bot's
+#                      existing copies first).
+#
+# Prints one reason token on stdout and returns 1 when the class can never wear
+# it, prints nothing and returns 0 when it can, and returns 2 when the QUERY
+# failed -- the third code exists because "the database did not answer" must
+# never be reported as "this item is wrong".
+itemdb_equip_fault() { # <classId> <entry> -> reason on stdout, 0 ok / 1 fault / 2 query failed
+    local cls="$1" entry="$2" row mask subs
+    local iclass isub invtype rlvl amask arace rskill rspell rhonor rrep flags xflags maxcount
+
+    row="$(itemdb_query "SELECT $ITEMDB_EQUIP_COLUMNS
+                         FROM ${ITEMDB_WORLD}.item_template
+                         WHERE entry = $entry;")" || return 2
+    [ -n "$row" ] || { echo "no_such_item"; return 1; }
+
+    IFS=$'\t' read -r iclass isub invtype rlvl amask arace rskill rspell rhonor rrep \
+                      flags xflags maxcount <<< "$(printf '%s\n' "$row" | head -1)"
+
+    mask=$(( 1 << (cls - 1) ))
+
+    # Ordered cheapest-to-explain first, and one reason only: an operator fixing
+    # a tier file wants the thing to change, not a list.
+    [ "$invtype" = "0" ] && { echo "not_equippable(inventory_type=0)"; return 1; }
+    if [ "$amask" != "-1" ] && [ $(( amask & mask )) -eq 0 ]; then
+        echo "class_restricted(allowable_class=$amask)"; return 1
+    fi
+    [ "$arace" = "-1" ] || { echo "race_restricted(allowable_race=$arace)"; return 1; }
+    [ "$rlvl" -le 60 ] || { echo "required_level($rlvl)"; return 1; }
+    [ "$rskill" = "0" ] || { echo "required_skill($rskill)"; return 1; }
+    [ "$rspell" = "0" ] || { echo "required_spell($rspell)"; return 1; }
+    [ "$rhonor" = "0" ] || { echo "required_honor_rank($rhonor)"; return 1; }
+    [ "$rrep" = "0" ] || { echo "required_reputation_faction($rrep)"; return 1; }
+    [ $(( flags & 0x10 )) -eq 0 ] || { echo "deprecated_flag"; return 1; }
+    [ $(( xflags & 0x04 )) -eq 0 ] || { echo "not_obtainable_flag"; return 1; }
+
+    case "$iclass" in
+        4) subs="$(itemdb_armor_subclasses "$cls")" || return 2
+           case " $subs " in
+               *" $isub "*) ;;
+               *) echo "no_armor_proficiency(subclass=$isub)"; return 1 ;;
+           esac ;;
+        2) subs="$(itemdb_weapon_subclasses "$cls")" || return 2
+           case " $subs " in
+               *" $isub "*) ;;
+               *) echo "no_weapon_proficiency(subclass=$isub)"; return 1 ;;
+           esac ;;
+        *) echo "not_gear(class=$iclass)"; return 1 ;;
+    esac
+
+    return 0
 }

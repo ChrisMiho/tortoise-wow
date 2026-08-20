@@ -94,8 +94,42 @@ CONSUMABLES='[{"itemId":13446,"count":20},{"itemId":8952,"count":20}]'
 
 usage() {
     echo "usage: $(basename "$0") [<class> <role>]" >&2
+    echo "       $(basename "$0") --check [<class> <role>]" >&2
     echo "       with no arguments, generates all 12 shipped combinations" >&2
     echo "       writes into $OUT_DIR" >&2
+    echo "       --check re-judges the tier files already in $OUT_DIR and writes nothing" >&2
+}
+
+# --- the equip gate ---------------------------------------------------------
+#
+# NOTHING IS WRITTEN UNTIL EVERY PICK HAS BEEN JUDGED. A tier file is the only
+# thing `tournament equip` is ever handed, so an item the class cannot wear is a
+# defect of THIS script -- it just used to be discovered a day later as
+# `ok=0 reason=cannot_equip(8)` in a console transcript, with a bare
+# InventoryResult number and no idea which of a dozen requirements it meant.
+# itemdb_equip_fault names the requirement, here, before the file exists.
+#
+# It re-checks what itemdb_candidates already filtered on purpose. The filter and
+# the judge are two expressions of the same rules and a hand-curated file never
+# went through the filter at all, so the judge is what actually holds -- which is
+# also why it is reachable on its own as `--check`.
+check_tier() { # <className> <role> <classId> <tier>; reads "slot<TAB>entry" on stdin
+    local cname="$1" role="$2" cid="$3" tier="$4" slot id reason rc bad=0
+    while IFS=$'\t' read -r slot id; do
+        [ -n "${slot:-}" ] || continue
+        rc=0
+        reason="$(itemdb_equip_fault "$cid" "$id")" || rc=$?
+        if [ "$rc" -eq 2 ]; then
+            echo "FATAL: the item_template query failed judging $cname-$role tier '$tier'" >&2
+            echo "       slot '$slot' (entry $id); mysql's own error is above. That is NOT" >&2
+            echo "       the same as the item being wrong, so nothing is concluded." >&2
+            return 2
+        fi
+        [ "$rc" -eq 0 ] && continue
+        echo "REJECT $cname-$role tier '$tier' slot '$slot': entry $id -- $reason" >&2
+        bad=1
+    done
+    return "$bad"
 }
 
 class_id() { # <className> -> class id, empty if unknown
@@ -170,6 +204,15 @@ generate_one() { # <className> <role>
         up_pairs="${up_pairs}$(printf '%s\t%s' "$slot" "$id")"$'\n'
     done < <(itemdb_slots)
 
+    # The gate, before the file exists. A rejected tier leaves the previous file
+    # untouched rather than replacing a working kit with an unwearable one.
+    printf '%s' "$base_pairs" | check_tier "$cname" "$role" "$cid" base || {
+        echo "FATAL: $f was NOT written -- the base tier contains an item this class" >&2
+        echo "       cannot equip (rejections above)" >&2; return 1; }
+    printf '%s' "$up_pairs" | check_tier "$cname" "$role" "$cid" upgrade || {
+        echo "FATAL: $f was NOT written -- the upgrade tier contains an item this class" >&2
+        echo "       cannot equip (rejections above)" >&2; return 1; }
+
     base_obj="$(printf '%s' "$base_pairs" | items_json)" || return 1
     up_obj="$(printf '%s' "$up_pairs" | items_json)" || return 1
 
@@ -193,25 +236,57 @@ generate_one() { # <className> <role>
     echo "wrote $f"
 }
 
+# The same judgement, applied to a file that already exists -- the only way a
+# hand-curated tier ever gets judged, since it never went through the generator.
+check_one() { # <className> <role>
+    local cname="$1" role="$2" cid t tiers rc=0
+    cid="$(class_id "$cname")"
+    [ -n "$cid" ] || { echo "FATAL: unknown class '$cname'" >&2; return 1; }
+    # Command substitution, NOT `done < <(gear_tiers ...)`. A redirect from a
+    # process substitution throws the generator's exit status away: the `||`
+    # there was reading the WHILE loop's status, which is 0 after zero
+    # iterations, so a missing or unreadable tier file made --check print
+    # `ok <class>-<role>` and exit 0 -- the exact false green this command
+    # exists to prevent (--check against an empty $OUT_DIR passed all 12).
+    tiers="$(gear_tiers "$cname" "$role")" || return 1
+    [ -n "$tiers" ] || { echo "FATAL: $cname-$role has no tiers" >&2; return 1; }
+    while IFS= read -r t; do
+        [ -n "${t:-}" ] || continue
+        gear_items "$cname" "$role" "$t" | tr '|' '\t' \
+            | check_tier "$cname" "$role" "$cid" "$t" || rc=1
+    done <<< "$tiers"
+    [ "$rc" -eq 0 ] && echo "ok $cname-$role"
+    return "$rc"
+}
+
 command -v jq >/dev/null 2>&1 || {
     echo "FATAL: jq is not installed (apt-get install jq); run this from WSL" >&2; exit 2; }
 command -v docker >/dev/null 2>&1 || {
     echo "FATAL: docker is not on PATH" >&2; exit 2; }
+
+action=generate
+if [ "${1:-}" = "--check" ]; then action=check; shift; fi
 
 case "$#" in
     0|2) ;;
     *) usage; exit 2 ;;
 esac
 
-mkdir -p "$OUT_DIR" || exit 2
+# --check writes nothing, so it must not create the directory either: an empty
+# $OUT_DIR conjured by a read-only command reads as "the tiers were generated".
+[ "$action" = "check" ] || mkdir -p "$OUT_DIR" || exit 2
+
+run_one() { # <className> <role>
+    if [ "$action" = "check" ]; then check_one "$1" "$2"; else generate_one "$1" "$2"; fi
+}
 
 rc=0
 if [ "$#" -eq 2 ]; then
-    generate_one "$1" "$2" || rc=1
+    run_one "$1" "$2" || rc=1
 else
     while IFS='|' read -r cname role; do
         [ -n "${cname:-}" ] || continue
-        generate_one "$cname" "$role" || rc=1
+        run_one "$cname" "$role" || rc=1
     done < <(printf '%s\n' "$COMBOS")
 fi
 exit "$rc"

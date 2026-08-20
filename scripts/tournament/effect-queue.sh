@@ -67,14 +67,23 @@ known_teams() { # -> the team ids that actually exist, space separated
 }
 
 QUEUE=""; EFFECT=""; TEAM=""; SLOT=""; SOURCE="mock"; ID=""
+
+# A value-taking flag given as the LAST argument used to `shift 2` with one
+# argument left. bash refuses to shift past $#, so $# never decreased and this
+# loop spun forever -- an adapter's typo becoming a silent hang with no output,
+# seen as `timeout` rc=124. Every such flag now checks it has a value first.
+need_val() { # <flag> <remaining-argc>
+    [ "$2" -ge 2 ] || { echo "$1 requires a value" >&2; usage; exit 2; }
+}
+
 while [ $# -gt 0 ]; do
     case "$1" in
-        --queue)  QUEUE="${2:-}"; shift 2 ;;
-        --effect) EFFECT="${2:-}"; shift 2 ;;
-        --team)   TEAM="${2:-}"; shift 2 ;;
-        --slot)   SLOT="${2:-}"; shift 2 ;;
-        --source) SOURCE="${2:-}"; shift 2 ;;
-        --id)     ID="${2:-}"; shift 2 ;;
+        --queue)  need_val "$1" $#; QUEUE="$2"; shift 2 ;;
+        --effect) need_val "$1" $#; EFFECT="$2"; shift 2 ;;
+        --team)   need_val "$1" $#; TEAM="$2"; shift 2 ;;
+        --slot)   need_val "$1" $#; SLOT="$2"; shift 2 ;;
+        --source) need_val "$1" $#; SOURCE="$2"; shift 2 ;;
+        --id)     need_val "$1" $#; ID="$2"; shift 2 ;;
         -h|--help) usage; exit 0 ;;
         *) echo "unknown arg: $1" >&2; usage; exit 2 ;;
     esac

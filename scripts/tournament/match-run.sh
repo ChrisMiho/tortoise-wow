@@ -36,6 +36,8 @@ ROOT="$(cd "$HERE/../.." && pwd)"
 . "$HERE/lib/team.sh"
 # shellcheck source=lib/ctl.sh
 . "$HERE/lib/ctl.sh"
+# shellcheck source=lib/artifacts.sh
+. "$HERE/lib/artifacts.sh"
 # shellcheck source=../../docs/playerbots/wsg/lib/wsg-bots-common.sh
 . "$ROOT/docs/playerbots/wsg/lib/wsg-bots-common.sh"
 
@@ -99,10 +101,21 @@ while [ "$#" -gt 0 ]; do
 done
 mkdir -p "$RUN_DIR" || { echo "FATAL: cannot create run dir $RUN_DIR" >&2; exit 1; }
 
+# The default run dir is SHARED by every ad-hoc match, and nothing else ever
+# removes this file, so a --mark that failed or a run that was aborted after the
+# mark leaves an offset from a previous match sitting in it. Section 6b gates the
+# capture on the file merely existing, so that stale offset does not take the
+# skip branch -- it captures the PREVIOUS match's window and files it under this
+# one. Clearing it here is what makes "the file exists" mean "this run marked it".
+rm -f "$RUN_DIR/bots.offset" \
+    || { echo "FATAL: cannot clear a stale $RUN_DIR/bots.offset" >&2; exit 1; }
+
 # Everything narrating the run goes to stderr AND to match.log; stdout is left
 # clean for the MATCH line and for the function that echoes the instance id.
 # A log() that wrote to stdout would end up INSIDE "$(assemble_direct)".
 log() { printf '[%s] %s\n' "$(date -u +%H:%M:%SZ)" "$*" | tee -a "$RUN_DIR/match.log" >&2; }
+# lib/artifacts.sh narrates through this, so its lines land in match.log too.
+artifacts_log() { log "$*"; }
 
 fatal() { log "FATAL: $*"; exit 1; }
 
@@ -368,7 +381,6 @@ EFFECT_QUEUE="${EFFECT_QUEUE:-$RUN_DIR/effects.ndjson}"
 # caps in TOURNAMENT-VIEWER-EFFECTS.md are per-match allowances and must reset
 # when the match does. That reset is also what makes the seeding below necessary.
 EFFECT_STATE="$RUN_DIR/effects"
-EFFECT_PID=""
 # Create the queue if it is not there. The consumer reads it line by line and a
 # zero-line file drains to nothing, so a match with no viewer activity then takes
 # exactly the same path as one with it, instead of a path where the consumer
@@ -378,69 +390,26 @@ mkdir -p "$(dirname "$EFFECT_QUEUE")" && : >> "$EFFECT_QUEUE" \
 
 # Killing the process at the end of the match is only HALF of "the consumer never
 # crosses into the next match", and the missing half is the one that is easy to
-# miss. The ledger that makes an effect fire exactly once is applied.txt under
+# miss: the ledger that makes an effect fire exactly once is applied.txt under
 # --state, which is per-match, while EFFECT_QUEUE may name one long-lived file
 # shared by every match in a bracket -- that override exists precisely so a single
 # viewer adapter can append to one queue all night. Put those together and the
-# next match's consumer starts with an EMPTY applied.txt and re-reads the
-# append-only queue FROM THE TOP: every command an earlier match already handled
-# is unhandled again.
+# next match's consumer would start with an EMPTY applied.txt and re-read the
+# append-only queue FROM THE TOP: every command an earlier match already handled,
+# unhandled again. Neither of the consumer's safety checks stops that -- the team
+# check passes whenever the targeted team is playing again, which in a bracket is
+# the ordinary case, and Player::InBattleGround() passes because the bots ARE in a
+# battleground, just not the one the command was aimed at.
 #
-# Neither safety check stops it. The team check passes whenever the targeted team
-# is playing again, which in a bracket is the ordinary case, not the exception;
-# and Player::InBattleGround() passes because the bots ARE in a battleground --
-# just not the one the command was aimed at. A kill_team a viewer bought in round
-# one would fire a second time, for free, in round three.
-#
-# So before the consumer's first pass, record every id already sitting in the
-# queue as handled. This uses the consumer's own mechanism rather than a new one:
-# applied.txt is one bare id per line, tested with `grep -qx`, so effect-consume.sh
-# needs no flag and no change. An effect is aimed at a LIVE match; anything queued
-# before this one started was aimed at a different match or at no match at all,
-# and nothing in the line says which, so dropping it is the only safe reading.
-# Lines appended from here on -- the ones a viewer is producing while watching
-# THIS match -- are untouched.
-effect_seed_applied() { # -> 0 once the ledger covers everything already queued
-    local ids n
-    mkdir -p "$EFFECT_STATE" || return 1
-    # -R with fromjson? so one malformed line cannot abort the scan and take every
-    # id after it with it; the consumer skips such a line too. `.id? // empty`
-    # drops a line that carries no id, which the consumer also ignores.
-    ids="$(jq -R -r 'fromjson? | .id? // empty' "$EFFECT_QUEUE")" || return 1
-    n="$(printf '%s\n' "$ids" | grep -c .)"
-    if [ -n "$ids" ]; then
-        printf '%s\n' "$ids" >> "$EFFECT_STATE/applied.txt" || return 1
-    fi
-    log "queue $EFFECT_QUEUE held $n command(s) before this match -- recorded as already handled in $EFFECT_STATE/applied.txt"
-    return 0
-}
-
-# Idempotent, and safe to call when the consumer never started or has already
-# exited: killing a reaped pid is only an error if it is treated as one.
-effect_consumer_stop() {
-    [ -n "$EFFECT_PID" ] || return 0
-    kill "$EFFECT_PID" 2>/dev/null || true
-    wait "$EFFECT_PID" 2>/dev/null || true
-    log "effect consumer stopped (pid $EFFECT_PID)"
-    EFFECT_PID=""
-}
-# Belt to the explicit stop's braces. `fatal` exits, the deadline path exits, and
-# an operator can Ctrl-C; every one of those would otherwise orphan a consumer
-# that keeps draining into the next match. This is the ONLY trap in the script --
-# a second `trap ... EXIT` would REPLACE this one rather than chain with it, so
-# anything else needing to run at exit belongs inside effect_consumer_stop.
-trap 'effect_consumer_stop' EXIT
+# Both halves -- the lifetime and the ledger -- are in lib/effect-runner.sh, and
+# the traps that make the lifetime hold on every exit path come from there too.
+# shellcheck source=lib/effect-runner.sh
+. "$HERE/lib/effect-runner.sh"
+effect_consumer_install_traps
 
 if [ -x "$HERE/effect-consume.sh" ]; then
-    # Before the consumer, never after: it drains on its very first pass, so a
-    # ledger seeded a moment too late is a ledger that seeded nothing.
-    effect_seed_applied \
-        || log "WARNING: could not read $EFFECT_QUEUE to seed $EFFECT_STATE/applied.txt -- if EFFECT_QUEUE is shared between matches, an earlier match's effects may replay onto these bots"
-    "$HERE/effect-consume.sh" --queue "$EFFECT_QUEUE" \
-        --alliance "$ATEAM" --horde "$HTEAM" \
-        --state "$EFFECT_STATE" --interval 5 >> "$RUN_DIR/effects.log" 2>&1 &
-    EFFECT_PID=$!
-    log "effect consumer started (pid $EFFECT_PID), queue $EFFECT_QUEUE, state $EFFECT_STATE, log $RUN_DIR/effects.log"
+    effect_consumer_start "$HERE/effect-consume.sh" "$ATEAM" "$HTEAM" \
+        "$RUN_DIR/effects.log" 5
 else
     # The consumer ships separately from this file. Its absence is "no viewer
     # effects today", not a match that cannot be played.
@@ -511,7 +480,11 @@ while :; do
         break
     fi
 
-    sleep "$MATCH_POLL_S"
+    # effect_sleep, not sleep: this is the one long wait with a consumer running,
+    # and a trap fires only once the foreground command finishes. A plain sleep
+    # would leave a SIGTERM unhandled -- and the consumer draining -- for the rest
+    # of the poll interval. See lib/effect-runner.sh.
+    effect_sleep "$MATCH_POLL_S"
 done
 
 # The FIRST thing after the loop, ahead of the artifact collection and well ahead
@@ -535,26 +508,11 @@ DURATION=$(( $(date +%s) - START_TS ))
 # a missing telemetry sample is a missing artifact, not a void result, and a
 # script that exited 1 here would tell the bracket driver the match never
 # happened. Failures are logged and dropped.
-if [ -x "$HERE/telemetry-extract.sh" ]; then
-    if "$HERE/telemetry-extract.sh" --instance "$INST" --out "$RUN_DIR/telemetry.csv" \
-            >> "$RUN_DIR/match.log" 2>&1; then
-        # telemetry-report.sh exits 1 when a bot is stuck or fewer than twenty
-        # entered. That is a finding about the bots, not a failure of this run --
-        # the report is written either way and the exit status is only logged.
-        if "$HERE/telemetry-report.sh" "$RUN_DIR/telemetry.csv" \
-                > "$RUN_DIR/telemetry-report.txt" 2>&1; then
-            log "telemetry report written to $RUN_DIR/telemetry-report.txt"
-        else
-            log "telemetry report flags a problem (stuck bots, or fewer than 20 entered) -- see $RUN_DIR/telemetry-report.txt"
-        fi
-    else
-        log "telemetry unavailable for instance $INST (is Tournament.TelemetryIntervalMs set, and was mangosd restarted after setting it?)"
-    fi
-else
-    # The extractor and the report ship separately from this file. Their absence
-    # is a "no telemetry today", not a broken match.
-    log "$HERE/telemetry-extract.sh is not present -- skipping telemetry artifacts"
-fi
+# telemetry-report.sh exits 1 when a bot is stuck or fewer than twenty entered.
+# That is a finding about the bots, not a failure of this run -- but only when the
+# script actually ran, which is why the branching lives in lib/artifacts.sh and is
+# tested there.
+telemetry_artifacts "$HERE" "$RUN_DIR" "$INST"
 
 if [ -f "$RUN_DIR/bots.offset" ]; then
     "$HERE/bot-log-capture.sh" --since "$RUN_DIR/bots.offset" \

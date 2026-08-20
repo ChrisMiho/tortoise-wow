@@ -20,8 +20,6 @@
 # backlog-drain stop sentinel: user-created, deleted once honored, never meant to be committed
 /docs/backlog/.stop
 
-# Personal Claude Code profile for the autonomous /loop (bypasses permission prompts)
-/.claude/settings.autonomous.json
 
 # Local Docker environment — contains the database password.
 .env

@@ -661,6 +661,78 @@ static void TournamentParseItemIds(char const* str, std::vector<uint32>& ids)
     }
 }
 
+// Vanilla 1.12 class proficiencies: everything a character of this class can
+// legitimately hold by level 60, armor skills and melee weapon skills alike.
+//
+// NOT a copy of what a bot happens to have. Measured on this world 2026-08-19,
+// across every character row in tw_char: not one character of ANY class has
+// SKILL_PLATE_MAIL, and no hunter or shaman has SKILL_MAIL. PlayerbotFactory
+// grants those only from level 40 (PlayerbotFactory.cpp:4154-4163) and
+// InitSkills never runs again on a bot levelled afterwards, so a level-60 bot
+// warrior stands there unable to wear plate. That is why the tournament's own
+// gear path had to stop asking and start granting: the tier files are per class,
+// two teams must wear the same grade of kit, and a bot's randomly-shaped skill
+// list is not something a tier file can be written against.
+//
+// The table is the boundary. `tournament equip` grants a class the proficiency
+// its OWN class could always have trained; it never grants a mage plate. The
+// class-impossible half is rejected earlier and by name, at generation time, by
+// itemdb_equip_fault in scripts/tournament/lib/itemdb.sh.
+static bool TournamentClassMayTrainSkill(uint8 cls, uint32 skill)
+{
+    switch (skill)
+    {
+        // Armor. Cloth is universal; misc armor (necks, rings, trinkets, cloaks)
+        // has no proficiency skill at all and never reaches this function.
+        case SKILL_CLOTH:      return true;
+        case SKILL_LEATHER:    return cls != CLASS_MAGE && cls != CLASS_PRIEST && cls != CLASS_WARLOCK;
+        case SKILL_MAIL:       return cls == CLASS_WARRIOR || cls == CLASS_PALADIN ||
+                                      cls == CLASS_HUNTER  || cls == CLASS_SHAMAN;
+        case SKILL_PLATE_MAIL: return cls == CLASS_WARRIOR || cls == CLASS_PALADIN;
+        case SKILL_SHIELD:     return cls == CLASS_WARRIOR || cls == CLASS_PALADIN || cls == CLASS_SHAMAN;
+
+        // Melee weapons, mirroring itemdb_weapon_subclasses in
+        // scripts/tournament/lib/itemdb.sh. Ranged skills are deliberately absent:
+        // the ranged slot is not one of the 13 the tournament requires, so nothing
+        // here ever asks for one.
+        case SKILL_AXES:
+        case SKILL_2H_AXES:    return cls == CLASS_WARRIOR || cls == CLASS_PALADIN ||
+                                      cls == CLASS_HUNTER  || cls == CLASS_SHAMAN;
+        case SKILL_MACES:      return cls == CLASS_WARRIOR || cls == CLASS_PALADIN ||
+                                      cls == CLASS_ROGUE   || cls == CLASS_PRIEST  ||
+                                      cls == CLASS_SHAMAN  || cls == CLASS_DRUID;
+        case SKILL_2H_MACES:   return cls == CLASS_WARRIOR || cls == CLASS_PALADIN ||
+                                      cls == CLASS_SHAMAN  || cls == CLASS_DRUID;
+        case SKILL_POLEARMS:   return cls == CLASS_WARRIOR || cls == CLASS_PALADIN ||
+                                      cls == CLASS_HUNTER  || cls == CLASS_DRUID;
+        case SKILL_SWORDS:     return cls == CLASS_WARRIOR || cls == CLASS_PALADIN ||
+                                      cls == CLASS_HUNTER  || cls == CLASS_ROGUE  ||
+                                      cls == CLASS_MAGE    || cls == CLASS_WARLOCK;
+        case SKILL_2H_SWORDS:  return cls == CLASS_WARRIOR || cls == CLASS_PALADIN ||
+                                      cls == CLASS_HUNTER;
+        case SKILL_STAVES:     return cls != CLASS_PALADIN && cls != CLASS_ROGUE;
+        case SKILL_DAGGERS:    return cls != CLASS_PALADIN;
+        case SKILL_FIST_WEAPONS: return cls == CLASS_WARRIOR || cls == CLASS_HUNTER ||
+                                        cls == CLASS_ROGUE   || cls == CLASS_SHAMAN ||
+                                        cls == CLASS_DRUID;
+        default:               return false;
+    }
+}
+
+// The proficiency CanUseItem is about to demand, or 0 if the item needs none.
+//
+// The fist-weapon special case is Player::CanUseItem's, not ours
+// (Player.cpp:12080-12086): fist weapons swing on unarmed skill but are gated on
+// SKILL_FIST_WEAPONS, so asking GetProficiencySkill() alone would test the wrong
+// skill and grant the wrong one.
+static uint32 TournamentRequiredProficiency(ItemPrototype const* proto)
+{
+    uint32 skill = proto->GetProficiencySkill();
+    if (skill && proto->Class == ITEM_CLASS_WEAPON && proto->SubClass == ITEM_SUBCLASS_WEAPON_FIST)
+        skill = SKILL_FIST_WEAPONS;
+    return skill;
+}
+
 bool ChatHandler::HandleTournamentEquipCommand(char* args)
 {
     char* nameStr = ExtractQuotedOrLiteralArg(&args);
@@ -708,13 +780,81 @@ bool ChatHandler::HandleTournamentEquipCommand(char* args)
         // typo in a tier file, while every other InventoryResult is a real item the
         // bot may not wear. The caller has to tell those apart, so they get
         // different reasons rather than one numeric code covering both.
-        if (!sObjectMgr.GetItemPrototype(itemId))
+        ItemPrototype const* proto = sObjectMgr.GetItemPrototype(itemId);
+        if (!proto)
         {
             reason = "no_such_item";
         }
         else
         {
             uint16 dest = 0;
+
+            // Grant the proficiency BEFORE asking whether the item can be worn.
+            //
+            // Without this the answer for nine of the twenty shipped tournament
+            // bots was reason=cannot_equip(8) -- EQUIP_ERR_NO_REQUIRED_PROFICIENCY
+            // -- on most of their kit, because no character on this world holds
+            // SKILL_PLATE_MAIL and the weapon skills a bot ends up with are
+            // whatever PlayerbotFactory::SetRandomSkill last happened to set. A
+            // tier file is per class and both teams must wear the same grade of
+            // kit, so "dress this bot" has to mean it.
+            //
+            // Bounded twice over: only a skill the bot's own class could have
+            // trained (TournamentClassMayTrainSkill), and only when it has none at
+            // all -- an existing skill value is never lowered or raised, so a bot
+            // that levelled its swords keeps what it earned.
+            //
+            // Weapon skills are granted at the level cap rather than at 1. A
+            // weapon skill of 1 at level 60 equips the sword and then misses with
+            // it all match, which is the same rigged match in a different costume;
+            // 5 x level is the cap PlayerbotFactory uses
+            // (PlayerbotFactory.cpp:4271). Armor skills are binary, so 1 is the
+            // whole of it -- the same value InitSkills sets.
+            if (uint32 skill = TournamentRequiredProficiency(proto))
+            {
+                if (!player->GetSkillValue(uint16(skill)) &&
+                    TournamentClassMayTrainSkill(player->getClass(), skill))
+                {
+                    uint16 value = (proto->Class == ITEM_CLASS_WEAPON)
+                                 ? uint16(player->GetLevel() * 5) : uint16(1);
+                    player->SetSkill(uint16(skill), value, value);
+
+                    // Its own record, not a field on the per-item line: a reader
+                    // splitting that line on whitespace must keep seeing exactly
+                    // the fields it saw before, and this is a thing done TO the
+                    // bot rather than a property of the equip.
+                    std::ostringstream gs;
+                    gs << "equip player=" << name
+                       << " granted_proficiency=" << skill
+                       << " value=" << value;
+                    TournamentEmit(gs.str());
+                }
+            }
+
+            // A unique item the bot ALREADY wears has to go before it can be
+            // applied again. CanEquipItem asks CanTakeMoreSimilarItems first
+            // (Player.cpp:11677-11680), which counts the copy already equipped
+            // against MaxCount and answers EQUIP_ERR_CANT_CARRY_MORE_OF_THIS --
+            // reason=cannot_equip(17). gear-apply.sh re-dresses every bot on every
+            // run by design, so without this a unique pick applies exactly once
+            // and fails for the rest of the tournament's life; on this world the
+            // only white trinket in existence (12846 Argent Dawn Commission) is
+            // unique, so that is every bot's trinket slot from the second run on.
+            //
+            // Destroying is what the command already does to the occupant of the
+            // destination slot a few lines below; this is the same act, reached
+            // earlier because the check that would have found the slot is the very
+            // check the duplicate breaks.
+            if (proto->MaxCount > 0)
+            {
+                // Counted and destroyed over the same ground, bank included: the
+                // count is what CanTakeMoreSimilarItems will hold against the
+                // equip (GetItemCount's inBankAlso), so destroying anything less
+                // than all of it leaves the block in place and the fix silent.
+                uint32 have = player->GetItemCount(itemId, true);
+                if (have > 0)
+                    player->DestroyItemCount(itemId, have, true, false, true);
+            }
 
             // swap = true, and it is load-bearing. The slot is EXPECTED to hold the
             // previous tier's item: FindEquipSlot with swap = false refuses any
@@ -954,12 +1094,36 @@ bool ChatHandler::HandleTournamentHealCommand(char* args)
     uint32 resurrected = 0;
     if (!plr->IsAlive())
     {
+        // Same refusal the kill path makes, and for the same reason: the name comes
+        // off an untrusted effect queue, and Player::ResurrectPlayer opens with
+        // `if (IsHardcore() && !forceHc) return;` (Player.cpp:5755). Without this
+        // guard a dead hardcore character stays a ghost, the record still claims
+        // resurrected=1, and SetHealth then runs on a dead unit. Reviving a
+        // hardcore character is not this command's call to make, so refuse rather
+        // than pass forceHc.
+        if (plr->IsHardcore())
+        {
+            TournamentEmit("heal player=" + name + " ok=0 reason=hardcore_character");
+            return true;
+        }
+
         // The same pair `.revive` uses (Commands.cpp:3016). Resurrecting without
         // SpawnCorpseBones leaves the corpse standing and the client can still run
         // back to it -- a live player with a corpse still on the field.
         // ResurrectPlayer's restore_percent is a fraction, so 1.0f is already a
         // full heal; the SetHealth below is what covers the alive-but-hurt case.
         plr->ResurrectPlayer(1.0f);
+
+        // ResurrectPlayer can decline silently, so the record reports what actually
+        // happened rather than what was asked for. If the target is still a ghost,
+        // leave the corpse alone and skip SetHealth -- both are meaningless on a
+        // dead unit -- and report ok=0 instead of a resurrection that never was.
+        if (!plr->IsAlive())
+        {
+            TournamentEmit("heal player=" + name + " ok=0 reason=resurrect_refused");
+            return true;
+        }
+
         plr->SpawnCorpseBones();
         resurrected = 1;
     }
@@ -1289,6 +1453,32 @@ bool ChatHandler::HandleTournamentCameraCommand(char* args)
         return true;
     }
 
+    // The same participant, one step earlier. m_Players is only written by
+    // BattleGround::AddPlayer, which HandleMoveWorldPortAckOpcode calls at the end
+    // of the port -- so a player `tournament add` has already invited and sent is
+    // absent from the lookup above for the whole flight and would pass it. Cutting
+    // a camera to them would teleport them off their inbound trajectory, and the
+    // ack would enrol them anyway on arrival: exactly the 11v10 the refusal above
+    // exists to prevent. The invite is the state that exists the whole time,
+    // because `add` takes it out before SendToBattleGround and only
+    // TournamentReleaseInvite or RemovePlayerAtLeave gives it back.
+    if (plr->IsInvitedForBattleGroundInstance(bg->GetInstanceID()))
+    {
+        TournamentEmit("camera error=spectator_is_invited_to_the_match(" + name + ")");
+        return true;
+    }
+
+    // Refused for the reason `add` refuses one: a player already mid-teleport
+    // cannot be sent anywhere, and TeleportTo would silently drop the second
+    // destination rather than fail loudly, leaving us to report a move that never
+    // happened. Also catches an inbound participant of some other instance whose
+    // invite this command has no business inspecting.
+    if (plr->IsBeingTeleported())
+    {
+        TournamentEmit("camera error=spectator_teleporting(" + name + ")");
+        return true;
+    }
+
     float x = 0.0f, y = 0.0f, z = 0.0f;
     std::string reason;
     std::string subject;
@@ -1317,6 +1507,20 @@ bool ChatHandler::HandleTournamentCameraCommand(char* args)
             TournamentEmit("camera error=spectator_in_another_battleground(" + name + ")");
             return true;
         }
+
+    // Everything below writes m_bgData, and every one of those writes also sets
+    // m_needSave -- so a half-applied camera move does not just look wrong now, it
+    // is flushed to characters.bgInstanceID/joinPos at the next save and outlives
+    // logout: the GM relocates into the arena on next login, and `tournament add`
+    // refuses them with already_in_a_battleground because InBattleGround() reads
+    // the leftover id. Captured here so the failure path can put every field back
+    // in one place, the way TournamentReleaseInvite undoes `add`'s writes in one
+    // place. (m_needSave itself has no setter and stays true, which only costs a
+    // save of values identical to the ones already on disk.)
+    WorldLocation const savedEntryPoint = plr->GetBattleGroundEntryPoint();
+    uint32 const savedBgInstanceId = plr->GetBattleGroundId();
+    BattleGroundTypeId const savedBgTypeId = plr->GetBattleGroundTypeId();
+    uint32 const savedBgQueueSlot = plr->GetCurrentBattlegroundQueueSlot();
 
     // Where they came from, so the end of the match sends them back somewhere
     // sensible instead of TeleportToBGEntryPoint falling back to their homebind
@@ -1357,12 +1561,40 @@ bool ChatHandler::HandleTournamentCameraCommand(char* args)
     // is at the keyboard: a director gets broadcast-style cuts between positions,
     // never smooth tracking.
     //
-    // The return value is checked rather than assumed. IsValidMapCoord rejects a
-    // position off the map, which an absurd height argument produces, and
-    // reporting moved=1 for a teleport that never happened would have a director
-    // cutting to a camera still sitting in the last shot.
-    if (!plr->TeleportTo(bg->GetMapId(), x, y, cameraZ, plr->GetOrientation(), teleFlags))
+    // Whether the port started is checked rather than assumed: reporting moved=1
+    // for a teleport that never happened would have a director cutting to a camera
+    // still sitting in the last shot. The return value alone does not answer that.
+    // It is false for the cheap up-front refusals -- IsValidMapCoord rejects a
+    // position off the map, which an absurd height argument produces -- but
+    // TeleportTo's return value is NOT "the port happened", and for this
+    // destination it is barely even "the port started". A battleground map is a
+    // different map copy from wherever the spectator was standing, so this always
+    // takes the far branch, and that branch ends at MapManager::ScheduleFarTeleport
+    // and returns true: mid-map-update it only queues the move, and the
+    // CanPlayerEnter / Map::CanEnter refusals that actually decide the traveller's
+    // fate are re-run later in Player::ExecuteTeleportFar (Player.cpp). So the
+    // return value alone would have us report moved=1 for a spectator who never
+    // left, with the m_bgData writes above -- and their m_needSave -- left behind.
+    //
+    // Checked the way `tournament add` checks SendToBattleGround: look at the
+    // player afterwards. Every path that really started a move sets a teleport
+    // semaphore -- near sets mSemaphoreTeleport_Near, an immediate far teleport
+    // sets mSemaphoreTeleport_Far, a queued one sets mPendingFarTeleport -- and
+    // IsBeingTeleported() is the OR of the three (Player.h). Not being teleported
+    // after the call therefore means refused, whatever the return value said.
+    bool const portStarted = plr->TeleportTo(bg->GetMapId(), x, y, cameraZ, plr->GetOrientation(), teleFlags)
+                             && plr->IsBeingTeleported();
+
+    if (!portStarted)
     {
+        // One rollback closing both writes above: the entry point and the
+        // battleground id go back to the values this handler found, so a moved=0
+        // refusal leaves the player exactly as unentered as they were and a later
+        // `tournament add` still sees a free player.
+        plr->SetBattleGroundEntryPoint(savedEntryPoint.mapId, savedEntryPoint.x,
+                                       savedEntryPoint.y, savedEntryPoint.z, savedEntryPoint.o);
+        plr->SetBattleGroundId(savedBgInstanceId, savedBgTypeId, savedBgQueueSlot);
+
         std::ostringstream ss;
         ss << "camera player=" << name
            << " instance=" << instanceId
@@ -1373,6 +1605,76 @@ bool ChatHandler::HandleTournamentCameraCommand(char* args)
            << " moved=0";
         TournamentEmit(ss.str());
         return true;
+    }
+
+    // Backstop for a port that starts and never lands, which the check above
+    // cannot see because it happens later and elsewhere: HandleMoveWorldPortAckOpcode
+    // bails to Player::HandleReturnOnTeleportFail when the battleground map has
+    // gone or Map::Add refuses the spectator, and that returns them to where they
+    // were WITHOUT touching m_bgData. Nothing else would ever clear it, so the
+    // stale bgInstanceID/joinPos gets flushed at the next save and is exactly the
+    // persistent "in a match they never entered" state the rollback above exists
+    // to prevent -- just reached by the slower road. Same shape as the invite
+    // backstop `tournament add` arms after SendToBattleGround.
+    //
+    // Only armed when this call actually wrote m_bgData. A repeat cut to an
+    // instance the spectator already carries the id of writes nothing (the
+    // SetBattleGroundId above is guarded, and the entry-point write is skipped for
+    // anyone already InBattleGround()), so arming there would queue an event whose
+    // "restore" would re-apply the very id an earlier cut's backstop is due to
+    // clear.
+    //
+    // Capturing the Player* raw is safe for the reason `add` documents: the event
+    // lives in that player's own processor and is aborted, not run, if the
+    // processor is destroyed (EventProcessor.h).
+    if (savedBgInstanceId != bg->GetInstanceID())
+    {
+        uint32 const targetInstanceId = bg->GetInstanceID();
+        plr->m_Events.AddLambdaEventAtOffset([plr, targetInstanceId, savedEntryPoint,
+                                              savedBgInstanceId, savedBgTypeId, savedBgQueueSlot]
+        {
+            // Landed. A battleground instance id IS its map's instance id
+            // (BattleGround.h), so this is "standing in that battleground's own
+            // map" -- the spectator is where the cut sent them and needs the id to
+            // stay, because the map lookup at every later ack reads it.
+            if (plr->IsInWorld() && plr->GetInstanceId() == targetInstanceId)
+                return;
+
+            // Somebody else owns the field now -- a later cut to a different
+            // instance, or a `tournament add`. Restoring a value from before their
+            // write would strand them, so leave it.
+            if (plr->GetBattleGroundId() != targetInstanceId)
+                return;
+
+            // A port is in flight right now -- a later cut to this same instance,
+            // most likely, since a director re-cuts every fifteen seconds and this
+            // fires eighty seconds after the one that armed it. Clearing the id
+            // mid-flight would make the ack's FindMap(mapId, GetBattleGroundId())
+            // miss and turn a working cut into a failed one, so this event stands
+            // down rather than sabotage it.
+            //
+            // KNOWN LIMIT: standing down is permanent for this event, and a repeat
+            // cut to an instance the spectator already carries the id of arms no
+            // event of its own -- so if that in-flight cut ALSO fails at the ack,
+            // the stale id survives until the next cut that lands. The next
+            // successful cut to this instance clears it by arriving, and a cut to
+            // any other instance overwrites it; what is left is a director that
+            // stopped mid-failure, whose GM keeps a bgInstanceID until an operator
+            // cuts once more or `tournament add`s them. Closing it properly needs
+            // per-camera-cut state that Player has no field for.
+            if (plr->IsBeingTeleported())
+                return;
+
+            plr->SetBattleGroundEntryPoint(savedEntryPoint.mapId, savedEntryPoint.x,
+                                           savedEntryPoint.y, savedEntryPoint.z, savedEntryPoint.o);
+            plr->SetBattleGroundId(savedBgInstanceId, savedBgTypeId, savedBgQueueSlot);
+
+            // Not a "TOURNAMENT " record: this fires long after the console
+            // session that issued the camera cut, and that prefix is reserved for
+            // TournamentEmit.
+            sLog.out(LOG_BG, "[tournament] camera port to instance %u never landed for %s, bgData rolled back",
+                     targetInstanceId, plr->GetName());
+        }, TOURNAMENT_HOLD_TIME_MS);
     }
 
     std::ostringstream ss;
