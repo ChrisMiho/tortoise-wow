@@ -3168,7 +3168,7 @@ bool BGTactics::selectObjective(bool reset)
 
         if (isDead && (botSelectedObjectives[botGUID] != nullptr))
         {
-            bot->Say("I'm dead, guess I'll reset my objective.", LANG_UNIVERSAL);
+            sLog.outDetail("Bot #%d %s:%d <%s>: died with an AB objective selected, resetting it", bot->GetGUIDLow(), bot->GetTeam() == ALLIANCE ? "A" : "H", bot->getLevel(), bot->GetName());
             botSelectedObjectives[botGUID] = nullptr; // Reset objective if we die... maybe more lucky elsewhere -- wait I don't think this is executed on dead bots so it's never triggered? Try something else
             botObjectiveSelectionTime[botGUID] = 0;
         }
