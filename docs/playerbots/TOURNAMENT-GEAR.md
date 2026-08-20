@@ -69,10 +69,63 @@ left the two teams in materially different gear and called it fair.
 
 A residual empty slot shows up in the audit, and the equip line that caused it
 reads `ok=0 reason=cannot_equip(<n>)`. Look `<n>` up in `InventoryResult`
-(`SharedDefines.h`): a class or level restriction is a **bad item choice in the
-tier file, not a broken script**. The likeliest cause is armour proficiency —
-1,818 of 1,940 white items are `allowable_class = -1`, so a generator filtering
-on that bitmask alone will have put plate on a mage. Fix the tier and re-run.
+(`src/game/Objects/Item.h:45` — **not** `SharedDefines.h`, where nothing of the
+sort is declared).
+
+Two codes accounted for every failure measured on this host, and both are now
+handled rather than reported:
+
+- **`cannot_equip(8)`** — `EQUIP_ERR_NO_REQUIRED_PROFICIENCY`. The bot has no
+  skill in the item's proficiency, so `Player::CanUseItem` refuses it
+  (`Player.cpp:12080-12088`). This is **not** a bad tier file: measured
+  2026-08-19 over every character row in `tw_char`, no character of any class on
+  this world holds `SKILL_PLATE_MAIL`, no hunter or shaman holds `SKILL_MAIL`,
+  and a bot's weapon skills are whatever `PlayerbotFactory::SetRandomSkill` last
+  set. `tournament equip` now **grants** the missing proficiency before it tries
+  the equip — bounded to skills the bot's own class could have trained, and only
+  where it has none at all. Weapon skills are granted at `5 × level`, because a
+  sword equipped at skill 1 misses all match and that is the same rigged match in
+  a different costume.
+- **`cannot_equip(17)`** — `EQUIP_ERR_CANT_CARRY_MORE_OF_THIS`, from
+  `CanTakeMoreSimilarItems` on a `max_count > 0` item the bot **already wears**.
+  `gear-apply.sh` re-dresses every bot on every run by design, so a unique item
+  applied once failed on every run after. `tournament equip` now destroys the
+  bot's existing copies of a unique item first. This is why `max_count` is *not*
+  filtered out of the generator: 12846 Argent Dawn Commission is the only white
+  trinket on this world, and excluding it empties the trinket slot for every
+  class.
+
+A tier file that genuinely holds an item the class can **never** wear no longer
+reaches the console at all — see the gate below.
+
+### The generation-time gate
+
+`itemdb_equip_fault` (`scripts/tournament/lib/itemdb.sh`) judges one entry
+against one class and names the requirement it fails:
+`no_armor_proficiency(subclass=4)`, `no_weapon_proficiency(subclass=6)`,
+`class_restricted(allowable_class=1)`, `required_level(70)`, `race_restricted`,
+`required_skill`, `required_spell`, `required_honor_rank`,
+`required_reputation_faction`, `deprecated_flag`, `not_obtainable_flag`,
+`not_equippable(inventory_type=0)`, `no_such_item`.
+
+`gear-generate.sh` runs it over every pick **before the file is written**, so a
+rejected tier leaves the previous file untouched:
+
+```
+REJECT mage-dps tier 'base' slot 'chest': entry 200 -- no_armor_proficiency(subclass=4)
+```
+
+The same judgement is reachable on an existing file — the only way a
+hand-curated tier ever gets judged, since it never went through the generator:
+
+```
+./scripts/tournament/gear-generate.sh --check              # all 12 combinations
+./scripts/tournament/gear-generate.sh --check mage dps     # one
+```
+
+It writes nothing and exits 1 if anything is rejected. Covered by
+`tests/tournament/gear-generate.test.sh`, which stubs `docker` and needs no
+database.
 
 ---
 
