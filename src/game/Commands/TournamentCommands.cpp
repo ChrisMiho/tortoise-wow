@@ -1453,6 +1453,32 @@ bool ChatHandler::HandleTournamentCameraCommand(char* args)
         return true;
     }
 
+    // The same participant, one step earlier. m_Players is only written by
+    // BattleGround::AddPlayer, which HandleMoveWorldPortAckOpcode calls at the end
+    // of the port -- so a player `tournament add` has already invited and sent is
+    // absent from the lookup above for the whole flight and would pass it. Cutting
+    // a camera to them would teleport them off their inbound trajectory, and the
+    // ack would enrol them anyway on arrival: exactly the 11v10 the refusal above
+    // exists to prevent. The invite is the state that exists the whole time,
+    // because `add` takes it out before SendToBattleGround and only
+    // TournamentReleaseInvite or RemovePlayerAtLeave gives it back.
+    if (plr->IsInvitedForBattleGroundInstance(bg->GetInstanceID()))
+    {
+        TournamentEmit("camera error=spectator_is_invited_to_the_match(" + name + ")");
+        return true;
+    }
+
+    // Refused for the reason `add` refuses one: a player already mid-teleport
+    // cannot be sent anywhere, and TeleportTo would silently drop the second
+    // destination rather than fail loudly, leaving us to report a move that never
+    // happened. Also catches an inbound participant of some other instance whose
+    // invite this command has no business inspecting.
+    if (plr->IsBeingTeleported())
+    {
+        TournamentEmit("camera error=spectator_teleporting(" + name + ")");
+        return true;
+    }
+
     float x = 0.0f, y = 0.0f, z = 0.0f;
     std::string reason;
     std::string subject;
@@ -1481,6 +1507,20 @@ bool ChatHandler::HandleTournamentCameraCommand(char* args)
             TournamentEmit("camera error=spectator_in_another_battleground(" + name + ")");
             return true;
         }
+
+    // Everything below writes m_bgData, and every one of those writes also sets
+    // m_needSave -- so a half-applied camera move does not just look wrong now, it
+    // is flushed to characters.bgInstanceID/joinPos at the next save and outlives
+    // logout: the GM relocates into the arena on next login, and `tournament add`
+    // refuses them with already_in_a_battleground because InBattleGround() reads
+    // the leftover id. Captured here so the failure path can put every field back
+    // in one place, the way TournamentReleaseInvite undoes `add`'s writes in one
+    // place. (m_needSave itself has no setter and stays true, which only costs a
+    // save of values identical to the ones already on disk.)
+    WorldLocation const savedEntryPoint = plr->GetBattleGroundEntryPoint();
+    uint32 const savedBgInstanceId = plr->GetBattleGroundId();
+    BattleGroundTypeId const savedBgTypeId = plr->GetBattleGroundTypeId();
+    uint32 const savedBgQueueSlot = plr->GetCurrentBattlegroundQueueSlot();
 
     // Where they came from, so the end of the match sends them back somewhere
     // sensible instead of TeleportToBGEntryPoint falling back to their homebind
@@ -1521,12 +1561,40 @@ bool ChatHandler::HandleTournamentCameraCommand(char* args)
     // is at the keyboard: a director gets broadcast-style cuts between positions,
     // never smooth tracking.
     //
-    // The return value is checked rather than assumed. IsValidMapCoord rejects a
-    // position off the map, which an absurd height argument produces, and
-    // reporting moved=1 for a teleport that never happened would have a director
-    // cutting to a camera still sitting in the last shot.
-    if (!plr->TeleportTo(bg->GetMapId(), x, y, cameraZ, plr->GetOrientation(), teleFlags))
+    // Whether the port started is checked rather than assumed: reporting moved=1
+    // for a teleport that never happened would have a director cutting to a camera
+    // still sitting in the last shot. The return value alone does not answer that.
+    // It is false for the cheap up-front refusals -- IsValidMapCoord rejects a
+    // position off the map, which an absurd height argument produces -- but
+    // TeleportTo's return value is NOT "the port happened", and for this
+    // destination it is barely even "the port started". A battleground map is a
+    // different map copy from wherever the spectator was standing, so this always
+    // takes the far branch, and that branch ends at MapManager::ScheduleFarTeleport
+    // and returns true: mid-map-update it only queues the move, and the
+    // CanPlayerEnter / Map::CanEnter refusals that actually decide the traveller's
+    // fate are re-run later in Player::ExecuteTeleportFar (Player.cpp). So the
+    // return value alone would have us report moved=1 for a spectator who never
+    // left, with the m_bgData writes above -- and their m_needSave -- left behind.
+    //
+    // Checked the way `tournament add` checks SendToBattleGround: look at the
+    // player afterwards. Every path that really started a move sets a teleport
+    // semaphore -- near sets mSemaphoreTeleport_Near, an immediate far teleport
+    // sets mSemaphoreTeleport_Far, a queued one sets mPendingFarTeleport -- and
+    // IsBeingTeleported() is the OR of the three (Player.h). Not being teleported
+    // after the call therefore means refused, whatever the return value said.
+    bool const portStarted = plr->TeleportTo(bg->GetMapId(), x, y, cameraZ, plr->GetOrientation(), teleFlags)
+                             && plr->IsBeingTeleported();
+
+    if (!portStarted)
     {
+        // One rollback closing both writes above: the entry point and the
+        // battleground id go back to the values this handler found, so a moved=0
+        // refusal leaves the player exactly as unentered as they were and a later
+        // `tournament add` still sees a free player.
+        plr->SetBattleGroundEntryPoint(savedEntryPoint.mapId, savedEntryPoint.x,
+                                       savedEntryPoint.y, savedEntryPoint.z, savedEntryPoint.o);
+        plr->SetBattleGroundId(savedBgInstanceId, savedBgTypeId, savedBgQueueSlot);
+
         std::ostringstream ss;
         ss << "camera player=" << name
            << " instance=" << instanceId
@@ -1537,6 +1605,76 @@ bool ChatHandler::HandleTournamentCameraCommand(char* args)
            << " moved=0";
         TournamentEmit(ss.str());
         return true;
+    }
+
+    // Backstop for a port that starts and never lands, which the check above
+    // cannot see because it happens later and elsewhere: HandleMoveWorldPortAckOpcode
+    // bails to Player::HandleReturnOnTeleportFail when the battleground map has
+    // gone or Map::Add refuses the spectator, and that returns them to where they
+    // were WITHOUT touching m_bgData. Nothing else would ever clear it, so the
+    // stale bgInstanceID/joinPos gets flushed at the next save and is exactly the
+    // persistent "in a match they never entered" state the rollback above exists
+    // to prevent -- just reached by the slower road. Same shape as the invite
+    // backstop `tournament add` arms after SendToBattleGround.
+    //
+    // Only armed when this call actually wrote m_bgData. A repeat cut to an
+    // instance the spectator already carries the id of writes nothing (the
+    // SetBattleGroundId above is guarded, and the entry-point write is skipped for
+    // anyone already InBattleGround()), so arming there would queue an event whose
+    // "restore" would re-apply the very id an earlier cut's backstop is due to
+    // clear.
+    //
+    // Capturing the Player* raw is safe for the reason `add` documents: the event
+    // lives in that player's own processor and is aborted, not run, if the
+    // processor is destroyed (EventProcessor.h).
+    if (savedBgInstanceId != bg->GetInstanceID())
+    {
+        uint32 const targetInstanceId = bg->GetInstanceID();
+        plr->m_Events.AddLambdaEventAtOffset([plr, targetInstanceId, savedEntryPoint,
+                                              savedBgInstanceId, savedBgTypeId, savedBgQueueSlot]
+        {
+            // Landed. A battleground instance id IS its map's instance id
+            // (BattleGround.h), so this is "standing in that battleground's own
+            // map" -- the spectator is where the cut sent them and needs the id to
+            // stay, because the map lookup at every later ack reads it.
+            if (plr->IsInWorld() && plr->GetInstanceId() == targetInstanceId)
+                return;
+
+            // Somebody else owns the field now -- a later cut to a different
+            // instance, or a `tournament add`. Restoring a value from before their
+            // write would strand them, so leave it.
+            if (plr->GetBattleGroundId() != targetInstanceId)
+                return;
+
+            // A port is in flight right now -- a later cut to this same instance,
+            // most likely, since a director re-cuts every fifteen seconds and this
+            // fires eighty seconds after the one that armed it. Clearing the id
+            // mid-flight would make the ack's FindMap(mapId, GetBattleGroundId())
+            // miss and turn a working cut into a failed one, so this event stands
+            // down rather than sabotage it.
+            //
+            // KNOWN LIMIT: standing down is permanent for this event, and a repeat
+            // cut to an instance the spectator already carries the id of arms no
+            // event of its own -- so if that in-flight cut ALSO fails at the ack,
+            // the stale id survives until the next cut that lands. The next
+            // successful cut to this instance clears it by arriving, and a cut to
+            // any other instance overwrites it; what is left is a director that
+            // stopped mid-failure, whose GM keeps a bgInstanceID until an operator
+            // cuts once more or `tournament add`s them. Closing it properly needs
+            // per-camera-cut state that Player has no field for.
+            if (plr->IsBeingTeleported())
+                return;
+
+            plr->SetBattleGroundEntryPoint(savedEntryPoint.mapId, savedEntryPoint.x,
+                                           savedEntryPoint.y, savedEntryPoint.z, savedEntryPoint.o);
+            plr->SetBattleGroundId(savedBgInstanceId, savedBgTypeId, savedBgQueueSlot);
+
+            // Not a "TOURNAMENT " record: this fires long after the console
+            // session that issued the camera cut, and that prefix is reserved for
+            // TournamentEmit.
+            sLog.out(LOG_BG, "[tournament] camera port to instance %u never landed for %s, bgData rolled back",
+                     targetInstanceId, plr->GetName());
+        }, TOURNAMENT_HOLD_TIME_MS);
     }
 
     std::ostringstream ss;
