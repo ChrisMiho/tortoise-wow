@@ -210,6 +210,12 @@ mkdir -p "$(dirname "$OUT")" 2>/dev/null || true
 # Names are alphabetic (team_validate enforces it), so they carry no regex
 # metacharacters and \b keeps a name from matching inside a longer word.
 capture_from() { # <offset>
+    # The output file is opened HERE, on its own, before the pipeline that fills
+    # it. Left inside the pipeline, a `> "$OUT"` that cannot be opened -- an
+    # unwritable directory, a read-only mount -- makes the pipeline status 1,
+    # which is exactly the code the "grep matched nothing" branch below waves
+    # through. The capture then reports success over a file it never wrote.
+    : > "$OUT" || { echo "cannot write $OUT" >&2; exit 2; }
     tail -c "+$(($1 + 1))" "$BOTS_LOG" | grep -aE "\b($pattern)\b" > "$OUT"
     rc=$?
     # grep exits 1 on "no lines matched", which is a legitimate outcome -- an
@@ -236,4 +242,8 @@ if [ "$start" -gt 0 ] && mark_is_stale; then
 fi
 
 lines="$(wc -l < "$OUT" | tr -d ' ')"
+# An unreadable $OUT gives wc nothing to count and an empty $lines, which would
+# print "captured  line(s)" and exit 0 -- a success line with the number missing
+# out of it. Anything that is not a count is a failure, and says so.
+is_uint "$lines" || { echo "cannot count the lines in $OUT" >&2; exit 2; }
 echo "captured $lines line(s) from $((now - start)) byte(s) into $OUT"
