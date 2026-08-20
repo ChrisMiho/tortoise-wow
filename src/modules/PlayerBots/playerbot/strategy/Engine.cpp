@@ -567,7 +567,7 @@ bool Engine::CanExecuteAction(const std::string& name, bool isUseful, bool isPos
 
 void Engine::addStrategy(const std::string& name)
 {
-    std::string const signatureBefore = StrategySignature();
+    uint64 const tokenBefore = StrategySetToken();
 
     // The second argument means "rebuild now", and initMode means the opposite
     // - hold rebuilds back until the bulk change is done - so passing one as
@@ -585,14 +585,15 @@ void Engine::addStrategy(const std::string& name)
         }
 
         LogAction("S:+%s", strategy->getName().c_str());
-        strategies[strategy->getName()] = strategy;
+        if (strategies.insert(std::make_pair(strategy->getName(), strategy)).second)
+            strategiesHash ^= StrategyNameHash(strategy->getName());
         strategy->OnStrategyAdded(state);
     }
 
     // Init() empties the action queue, so only pay it when the strategy set
     // actually moved. Re-adding a strategy the engine already carries used to
     // wipe the queue for nothing.
-    if (!initMode && StrategySignature() != signatureBefore)
+    if (!initMode && StrategySetToken() != tokenBefore)
     {
         Init();
     }
@@ -625,6 +626,7 @@ bool Engine::removeStrategy(const std::string& name, bool init)
 
     LogAction("S:-%s", name.c_str());
     i->second->OnStrategyRemoved(state);
+    strategiesHash ^= StrategyNameHash(i->first);
     strategies.erase(i);
 
     if (init)
@@ -638,6 +640,7 @@ bool Engine::removeStrategy(const std::string& name, bool init)
 void Engine::removeAllStrategies()
 {
     strategies.clear();
+    strategiesHash = 0;
     Init();
 }
 
@@ -905,7 +908,7 @@ void Engine::ChangeStrategy(const std::string& names)
     // only the set left at the end matters. Hold the rebuilds back for the
     // whole list and do one afterwards - the same thing
     // PlayerbotAI::ResetStrategies does around its bulk change.
-    std::string const signatureBefore = StrategySignature();
+    uint64 const tokenBefore = StrategySetToken();
 
     bool const wasInitMode = initMode;
     initMode = true;
@@ -937,7 +940,7 @@ void Engine::ChangeStrategy(const std::string& names)
 
     // Caller is in a bulk change of its own - it will rebuild when it is done.
     //
-    // The signature guard is what keeps a no-op change cheap; it is no longer
+    // The set-token guard is what keeps a no-op change cheap; it is no longer
     // what keeps a real one safe - Reset() now defers while DoNextAction owns
     // the queue. Before both, Init() -> Reset() drained `queue` outright, so a
     // ChangeStrategy issued from inside an action's Execute() destroyed every
@@ -949,21 +952,8 @@ void Engine::ChangeStrategy(const std::string& names)
     // relevance-70 `bg check flag` action and killed the rest of the tick, so
     // `bg move to objective` at relevance 1.0 was queued 23,908 times and
     // popped none.
-    if (!initMode && StrategySignature() != signatureBefore)
+    if (!initMode && StrategySetToken() != tokenBefore)
         Init();
-}
-
-std::string Engine::StrategySignature() const
-{
-    // strategies is an ordered map, so equal sets give equal strings.
-    std::string signature;
-    for (std::map<std::string, Strategy*>::const_iterator i = strategies.begin(); i != strategies.end(); ++i)
-    {
-        signature += i->first;
-        signature += "|";
-    }
-
-    return signature;
 }
 
 void Engine::PrintStrategies(Player* requester, const std::string& engineType)
